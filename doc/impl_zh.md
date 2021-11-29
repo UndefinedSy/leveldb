@@ -17,75 +17,41 @@ young level 中的文件可能包含有重叠的 keys。然而其他 levels 中�
 
 
 ### Manifest
-MANIFEST文件列出了组成每个级别的一组分类表、相应的键范围以及其他重要的元数据。每当数据库被重新打开时，就会创建一个新的MANIFEST文件（在文件名中嵌入一个新的编号）。MANIFEST文件被格式化为日志，对服务状态所做的改变（当文件被添加或删除时）被附加到该日志中。
-
-A MANIFEST file lists the set of sorted tables that make up each level, the
-corresponding key ranges, and other important metadata. A new MANIFEST file
-(with a new number embedded in the file name) is created whenever the database
-is reopened. The MANIFEST file is formatted as a log, and changes made to the
-serving state (as files are added or removed) are appended to this log.
+MANIFEST 文件中列出了组成每个 level 的一组 sorted tables，相应的 key range，以及其他重要的元数据。每当数据库被重新打开时，就会创建一个新的 MANIFEST 文件（在文件名中会嵌入一个新的编号）。MANIFEST 文件的组织形式是一个 log，对服务状态所做的变更（即文件的添加或删除）会被 append 到该日志中。
 
 ### Current
-CURRENT是一个简单的文本文件，包含最新的MANIFEST 文件的名称。
-CURRENT is a simple text file that contains the name of the latest MANIFEST
-file.
+CURRENT 是一个简单的文本文件，其内容为最新的 MANIFEST 文件的名称。
 
 ### Info logs
-信息性消息被打印到名为LOG和LOG.old的文件中。
-Informational messages are printed to files named LOG and LOG.old.
+Infomational messages 会被打印到名为 LOG 和 LOG.old 的文件中。
 
 ### Others
-其他用于各种用途的文件也可能存在（LOCK，*.dbtmp）。
-Other files used for miscellaneous purposes may also be present (LOCK, *.dbtmp).
+还有一些用于其他各种用途的文件的存在 (LOCK, *.dbtmp)
+
 
 ## Level 0
-当日志文件增长超过一定大小（默认为4MB）。
-创建一个全新的memtable和日志文件，并将未来的更新指向这里。
+当 log file 增长到超过一定大小时（默认为 4MB），会创建一个全新的 memtable 和 log file，并将之后的 updates 指向这里。
 
-在后台。
+在后台会：
+1. 把之前的 memtable 的内容写到 sstable 中。
+2. 丢弃该 memtable。
+3. 删除旧的 logfile 和旧的 memtable。
+4. 将新的 sstable 添加到 young level (level-0)。
 
-1. 把以前的memtable的内容写到sstable中。
-2. 丢弃memtable。
-3. 删除旧的日志文件和旧的memtable。
-4. 将新的sstable添加到年轻（0级）级别。
-
-When the log file grows above a certain size (4MB by default):
-Create a brand new memtable and log file and direct future updates here.
-
-In the background:
-
-1. Write the contents of the previous memtable to an sstable.
-2. Discard the memtable.
-3. Delete the old log file and the old memtable.
-4. Add the new sstable to the young (level-0) level.
 
 ## Compactions
-当L级的大小超过其极限时，我们在后台线程中压缩它。压实工作从L级挑选一个文件，并从下一个L+1级挑选所有重叠的文件。注意，如果一个L级的文件只与(L+1)级文件的一部分重叠，那么(L+1)级的整个文件将被用作压实的输入，并在压实后被丢弃。 另外：因为第0级是特殊的（其中的文件可能相互重叠），我们对从第0级到第1级的压实进行特殊处理：如果其中一些文件相互重叠，第0级的压实可能会挑选一个以上的第0级文件。
+当 level-L 的大小超过其极限时，我们会通过一个后台线程去 compact 它。compaction 从 level-L 中选出一个文件，并找出 level-(L+1) 中的所有 overlapping 的文件。需要注意的是，如果一个 level-L 的文件只与一个 level-(L+1) 文件的一部分重叠，那么这个 level-(L+1) 文件的整体将被用作 compaction 的输入，并在 compaction 后被丢弃。
 
-When the size of level L exceeds its limit, we compact it in a background
-thread. The compaction picks a file from level L and all overlapping files from
-the next level L+1. Note that if a level-L file overlaps only part of a
-level-(L+1) file, the entire file at level-(L+1) is used as an input to the
-compaction and will be discarded after the compaction.  Aside: because level-0
-is special (files in it may overlap each other), we treat compactions from
-level-0 to level-1 specially: a level-0 compaction may pick more than one
-level-0 file in case some of these files overlap each other.
+另外，因为 level-0 是特殊的（其中的文件可能彼此相互 overlap），我们对从 level-0 到 level-1 的 compactions 会进行特殊处理：如果其中一些文件相互重叠，每次 level-0 的 compaction 可能会挑选超过一个以上的 level-0 files。
 
-压实法合并了所选文件的内容，以产生一连串的水平-(L+1)文件。在当前的输出文件达到目标文件大小（2MB）后，我们会切换到产生一个新的（L+1）级文件。当当前输出文件的密钥范围增长到足以与10个以上的(L+2)级文件重叠时，我们也会切换到一个新的输出文件。 这最后一条规则确保以后对(L+1)级文件的压缩不会从(L+2)级文件中获取太多的数据。
+一次 compaction 会合并所挑选文件的内容，以产生一系列的 level-(L+1) 的文件。
+- 在当前的 output file 达到目标文件大小（2MB）后，我们会切换生成一个新的 level-(L+1) 文件。
+- 在当前的 output file 的 key range 增长到与 10 个以上的 level-(L+2) 存在 overlap 时，我们也会切换生成一个新的 output file。
+  - 这条规则确保了之后的对 level-(L+1) 文件的 compaction 不会从 level-(L+2) 中 pick up 太多数据。
 
-A compaction merges the contents of the picked files to produce a sequence of
-level-(L+1) files. We switch to producing a new level-(L+1) file after the
-current output file has reached the target file size (2MB). We also switch to a
-new output file when the key range of the current output file has grown enough
-to overlap more than ten level-(L+2) files.  This last rule ensures that a later
-compaction of a level-(L+1) file will not pick up too much data from
-level-(L+2).
+丢弃旧文件 和 添加新文件 都会被添加到 serving state。
 
-旧文件被丢弃，新文件被添加到服务状态。
-The old files are discarded and the new files are added to the serving state.
-
-
-一个特定级别的压实是通过键空间来旋转的。更详细地说，对于每个级别L，我们记住L级别的最后一次压实的结束键，L级别的下一次压实将选择在这个键之后开始的第一个文件（如果没有这样的文件，就绕到键空间的开头）。
+一个特定 level 的 compactions 是通过键空间来旋转的。更详细地说，对于每个级别L，我们记住L级别的最后一次压实的结束键，L级别的下一次压实将选择在这个键之后开始的第一个文件（如果没有这样的文件，就绕到键空间的开头）。
 
 
 Compactions for a particular level rotate through the key space. In more detail,
