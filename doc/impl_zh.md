@@ -51,104 +51,55 @@ Infomational messages 会被打印到名为 LOG 和 LOG.old 的文件中。
 
 丢弃旧文件 和 添加新文件 都会被添加到 serving state。
 
-一个特定 level 的 compactions 是通过键空间来旋转的。更详细地说，对于每个级别L，我们记住L级别的最后一次压实的结束键，L级别的下一次压实将选择在这个键之后开始的第一个文件（如果没有这样的文件，就绕到键空间的开头）。
+对一个 level 的 compactions 是通过 key space 来 rotate 的。更具体来说，对于每个 level-L，我们会记住 level-L 的最后一次 compaction 的 ending key，对 level-L 的下一次 compaction 将选择在这个 ending key 之后开始的第一个文件（如果没有这样的文件，就会绕到 key space 的开头(WHY not terminate?)）。
 
+Compactions 会丢弃掉那些被覆盖的 values。
+如果一个 key 带有删除标记，且没有更高编号（更新）的 levels 中存在有文件的 key range 与该 key 有重叠，则也会丢弃该删除标记。（They also drop deletion markers if there are no higher numbered levels that contain a file whose range overlaps the current key.）
 
-Compactions for a particular level rotate through the key space. In more detail,
-for each level L, we remember the ending key of the last compaction at level L.
-The next compaction for level L will pick the first file that starts after this
-key (wrapping around to the beginning of the key space if there is no such
-file).
-
-压实会删除被覆盖的值。如果没有更高编号的级别包含一个范围与当前键重合的文件，它们也会放弃删除标记。
-Compactions drop overwritten values. They also drop deletion markers if there
-are no higher numbered levels that contain a file whose range overlaps the
-current key.
 
 ### Timing
-0级压缩将从0级读取最多4个1MB的文件，最坏的情况是 所有的1级文件（10MB）。也就是说，我们将读取14MB并写入14MB。
-Level-0 compactions will read up to four 1MB files from level-0, and at worst
-all the level-1 files (10MB). I.e., we will read 14MB and write 14MB.
+Level-0 compactions 最多会从 level-0 中读取 4 个 1MB 的文件，以及最坏的情况下会读取所有的 level-1 的文件（10MB）（也就是说读取 14MB 并写入 14MB）。
 
-除了特殊的0级压缩之外，我们将从0级中挑选一个2MB的文件。L. 在最坏的情况下，这将与L+1级的12个文件重叠（10个是因为 级别（L+1）的大小是L级的10倍，另外两个在边界处 因为L级的文件范围通常不会与L+1级的文件范围对齐）。在L级的文件范围通常不会与L+1级的文件范围对齐）。因此，压实将读取26MB，写入26MB。假设磁盘IO率为100MB/s（现代硬盘的大致范围），最差的压实成本将约为0.1美元。压实成本将是大约0.5秒。
+除了特殊的 level-0 的 compactions 之外，我们将从 level-L 中挑选一个 2MB 的文件。
+在最坏的情况下，这将与 level-(L+1) 的约 12 个文件存在 overlap:
+> - 10 个是因为 level-(L+1) 的大小是 level-L 的 10 倍，
+> - 另外 2 个是在 boundaries 处，因为 level-L 的 file ranges 通常不会与 level-(L+1) 的 file ranges 对齐。
 
-Other than the special level-0 compactions, we will pick one 2MB file from level
-L. In the worst case, this will overlap ~ 12 files from level L+1 (10 because
-level-(L+1) is ten times the size of level-L, and another two at the boundaries
-since the file ranges at level-L will usually not be aligned with the file
-ranges at level-L+1). The compaction will therefore read 26MB and write 26MB.
-Assuming a disk IO rate of 100MB/s (ballpark range for modern drives), the worst
-compaction cost will be approximately 0.5 second.
+因此，compaction 将读取 26MB，写入 26MB。假设磁盘 I/O 速率为 100MB/s，最差的情况下 compaction 将花费 0.5 秒。
 
-如果我们把后台写入的速度控制在较小的范围内，比如说100MB/s全速的10%，那么压缩成本就会降低。100MB/s的速度，压实可能需要5秒。如果用户的写入速度是 10MB/s，我们可能会建立大量的0级文件（~50个以容纳5*10MB）。这 这可能会大大增加读取的成本，因为每次读取都要合并更多的 文件的开销。
+如果我们把后台写入的速度控制在较小的范围内，比如说 100MB/s 的 10%，那么 compaction 则会需要 5 秒。如果用户的写入速度是 10MB/s，则可能会建立大量的 level-0 文件（约 50 个以容纳 50MB）。这 这可能会大大增加读操作的开销，因为每次读取都要合并更多的文件。
 
+**Solution 1**: 当 level-0 files 的数量较多时，可以增加 log switching 的阈值。其缺点是: 这个阈值越大，我们就需要更多的内存来容纳相应的 memtable。
 
-If we throttle the background writing to something small, say 10% of the full
-100MB/s speed, a compaction may take up to 5 seconds. If the user is writing at
-10MB/s, we might build up lots of level-0 files (~50 to hold the 5*10MB). This
-may significantly increase the cost of reads due to the overhead of merging more
-files together on every read.
+**Solution 2**: 当 level-0 files 的数量增加时，可以人为地降低写入速率。
 
-解决方案1：为了减少这个问题，我们可能要增加日志切换的阈值。当0级文件的数量较多时，我们可能要增加日志切换的阈值。尽管其缺点是 这个阈值越大，我们就需要更多的内存来容纳 相应的memtable。
+**Solution 3**: 我们致力于降低 wide merges 的成本。大部分的 level-0 文件的 blocks 在缓存中没有被压缩，我们只需要考虑 merging iterator 中的 O(N) 的复杂性。
 
-Solution 1: To reduce this problem, we might want to increase the log switching
-threshold when the number of level-0 files is large. Though the downside is that
-the larger this threshold, the more memory we will need to hold the
-corresponding memtable.
-
-解决方案2：当0级文件的数量增加时，我们可能想人为地降低写入率。0级文件的数量增加时，我们可能要人为地降低写入率。
-
-Solution 2: We might want to decrease write rate artificially when the number of
-level-0 files goes up.
-
-解决方案3：我们致力于降低非常宽的合并的成本。也许大部分的 0级文件的区块在缓存中没有被压缩，我们只需要担心那些被压缩的区块。我们只需要担心合并迭代器中的O(N)复杂性。
-
-Solution 3: We work on reducing the cost of very wide merges. Perhaps most of
-the level-0 files will have their blocks sitting uncompressed in the cache and
-we will only need to worry about the O(N) complexity in the merging iterator.
 
 ### Number of files
+除了 2MB 的文件，我们也可以为更高 levels 生成更大的文件，从而减少总的文件数，但代价是更多的 bursty（突发的）compactions。 另外，我们也可以将文件 shard 到多个目录。
 
-我们可以不总是制作2MB的文件，而是为更大的级别制作更大的文件 来减少总的文件数，但代价是更多的突发性的 压实。 另外，我们也可以将文件集分到多个 目录。
+> 这是一个在 ext3 文件系统上的实验，显示了在具有不同文件数量的目录中进行 100K 次 file opens 的耗时:
+> 
+> | Files in directory | Microseconds to open a file |
+> |-------------------:|----------------------------:|
+> |               1000 |                           9 |
+> |              10000 |                          10 |
+> |             100000 |                          16 |
 
-Instead of always making 2MB files, we could make larger files for larger levels
-to reduce the total file count, though at the expense of more bursty
-compactions.  Alternatively, we could shard the set of files into multiple
-directories.
+所以在现代文件系统中，对目录的 sharding 也许是不必要的。
 
-2011年2月4日在ext3文件系统上的一个实验显示了以下时间 在具有不同数量文件的目录中进行100K的文件打开。
-
-An experiment on an ext3 filesystem on Feb 04, 2011 shows the following timings
-to do 100K file opens in directories with varying number of files:
-
-
-| Files in directory | Microseconds to open a file |
-|-------------------:|----------------------------:|
-|               1000 |                           9 |
-|              10000 |                          10 |
-|             100000 |                          16 |
-
-So maybe even the sharding is not necessary on modern filesystems?
 
 ## Recovery
-* 读取CURRENT以找到最新提交的MANIFEST的名称
-* 读取命名的MANIFEST文件
-* 清理陈旧的文件
-* 我们可以在这里打开所有的sstables，但可能最好是偷懒......
-* 将日志块转换为一个新的0级sstable
-*开始引导新的写操作到一个新的日志文件，并恢复序列#。
+* 读文件 CURRENT 以找到 latest committed MANIFEST 的文件名
+* 读取对应的 MANIFEST 文件
+* 清理 stale files
+* 现在可以打开所有的 sstables，但可能最好是采用 lazy 的方式
+* 将 log chunk 转换为一个新的 level-0 sstable
+* 将新的写请求指向到一个新的 log file，该文件会带有 recovered sequence#
 
-* Read CURRENT to find name of the latest committed MANIFEST
-* Read the named MANIFEST file
-* Clean up stale files
-* We could open all sstables here, but it is probably better to be lazy...
-* Convert log chunk to a new level-0 sstable
-* Start directing new writes to a new log file with recovered sequence#
 
 ## Garbage collection of files
-`RemoveObsoleteFiles()`在每次压缩结束和恢复结束时都会被调用。恢复的时候调用。它找出数据库中所有文件的名称。它删除了所有 不是当前日志文件的所有日志文件。它删除了所有没有被某个级别引用的表文件。的表文件，这些文件不是从某个级别引用的，也不是活动压实的输出。
-
-`RemoveObsoleteFiles()` is called at the end of every compaction and at the end
-of recovery. It finds the names of all files in the database. It deletes all log
-files that are not the current log file. It deletes all table files that are not
-referenced from some level and are not the output of an active compaction.
+`RemoveObsoleteFiles()` 会在每次 compaction 结束和 recovery 结束时被调用。它会先找出数据库中所有文件名。
+- 它会删除不是 current log file 的日志文件
+- 它会删除没有被任何 level 所引用，且不是一个 active compaction 的 ouput 的 table files
