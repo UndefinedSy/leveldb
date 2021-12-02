@@ -54,19 +54,9 @@ for an explanation of varint64 format.
 metaindex block 会包含一个从 `filter.<n>` 映射到该 filter block 的 Blockhandle，其中 `<n>` 是该 filter policy 的 `Name()` 方法所返回的字符串。
 
 filter block 存储了一系列的 filters，其中 filter `i` 包含了 `FilterPolicy::CreateFilter()` 的 output
-filter block 存储了一系列的 filters，其中 filter `i` 包含了对存储在文件偏移量在范围内的块中的所有键的 `FilterPolicy::CreateFilter()` 的输出
-The filter block stores a sequence of filters, where filter i contains
-the output of `FilterPolicy::CreateFilter()` on all keys that are stored
-in a block whose file offset falls within the range
+filter block 存储了一系列的 filters，其中 filter `i` 是 对存储在 file offset 为 $[i*base ... (i+1)*base-1]$ 范围内的 block 中的所有 keys 做 `FilterPolicy::CreateFilter()` 的输出。
 
-    [ i*base ... (i+1)*base-1 ]
-
-目前，“base”是 2KB。因此，例如，如果块 X 和 Y 从范围`[ 0KB .. 2KB-1 ]` 开始，则 X 和 Y 中的所有键都将通过调用 `FilterPolicy::CreateFilter()` 转换为过滤器，并且生成的过滤器将作为过滤器块中的第一个过滤器存储。
-Currently, "base" is 2KB.  So for example, if blocks X and Y start in
-the range `[ 0KB .. 2KB-1 ]`, all of the keys in X and Y will be
-converted to a filter by calling `FilterPolicy::CreateFilter()`, and the
-resulting filter will be stored as the first filter in the filter
-block.
+目前 "base" 是 2KB。因此，例如，如果 block X 和 Y 都起始于 range `[ 0KB .. 2KB-1 ]`，则 X 和 Y 中的所有 keys 都将通过调用 `FilterPolicy::CreateFilter()` 转换为一个 filter，并且这个生成的 filter 将作为 filter block 中的第一个 filter。
 
 filter block 的组织形式如下:
 ```
@@ -86,9 +76,8 @@ filter block 的组织形式如下:
     lg(base)                              : 1 byte
 ```
 
-过滤器块末尾的偏移数组允许从数据块偏移到相应过滤器的高效映射。
-The offset array at the end of the filter block allows efficient
-mapping from a data block offset to the corresponding filter.
+filter block 末尾的 offset array 允许通过其 data block 的 offset 直接找到对应的 filter。
+
 
 ### "stats" Meta Block
 stats meta block 中包含了各种统计数据。其 key 是统计数据的 name，其 value 包含了实际的统计信息。

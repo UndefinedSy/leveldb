@@ -3,16 +3,12 @@ leveldb
 
 _Jeff Dean, Sanjay Ghemawat_
 
-The leveldb library provides a persistent key value store. Keys and values are
-arbitrary byte arrays.  The keys are ordered within the key value store
-according to a user-specified comparator function.
+leveldb lib 提供了一个持久化的 kv 存储。keys 和 values 是任意字节的数组。keys 会根据用户指定的比较函数在 kv 存储中排序。
 
 ## Opening A Database
+leveldb database 具有一个对应其文件系统目录的 name。数据库的所有数据都存储在这个目录中。
 
-A leveldb database has a name which corresponds to a file system directory. All
-of the contents of database are stored in this directory. The following example
-shows how to open a database, creating it if necessary:
-
+下例显示了如何打开数据库，并在必要时创建它：
 ```c++
 #include <cassert>
 #include "leveldb/db.h"
@@ -25,28 +21,20 @@ assert(status.ok());
 ...
 ```
 
-If you want to raise an error if the database already exists, add the following
-line before the `leveldb::DB::Open` call:
-
+如果期望在该 db 已经存在的情况下抛出一个 error，可以在 `leveldb::DB::Open` 中加上如下的 option:
 ```c++
 options.error_if_exists = true;
 ```
 
 ## Status
-
-You may have noticed the `leveldb::Status` type above. Values of this type are
-returned by most functions in leveldb that may encounter an error. You can check
-if such a result is ok, and also print an associated error message:
-
+那些可能出现错误的函数大多会返回一个类型为 `leveldb::Status` 的值，可以通过该结果检查执行是否成功，并可以打出相关的错误信息:
 ```c++
 leveldb::Status s = ...;
 if (!s.ok()) cerr << s.ToString() << endl;
 ```
 
 ## Closing A Database
-
-When you are done with a database, just delete the database object. Example:
-
+当使用完一个 database 时，只需要 delete database object 即可:
 ```c++
 ... open the db as described above ...
 ... do something with db ...
@@ -54,10 +42,7 @@ delete db;
 ```
 
 ## Reads And Writes
-
-The database provides Put, Delete, and Get methods to modify/query the database.
-For example, the following code moves the value stored under key1 to key2.
-
+database 提供了 Put, Delete, Get 方法以修改/查询数据库:
 ```c++
 std::string value;
 leveldb::Status s = db->Get(leveldb::ReadOptions(), key1, &value);
@@ -66,86 +51,49 @@ if (s.ok()) s = db->Delete(leveldb::WriteOptions(), key1);
 ```
 
 ## Atomic Updates
-
-Note that if the process dies after the Put of key2 but before the delete of
-key1, the same value may be left stored under multiple keys. Such problems can
-be avoided by using the `WriteBatch` class to atomically apply a set of updates:
-
+假设上面的例子，进程在 Put key2 之后但在 Delete key1 之前宕掉，则相同的值可能会存储在多个键下。  
+可以通过使用类 `WriteBatch` 来原子地应用一组的 updates：
 ```c++
 #include "leveldb/write_batch.h"
 ...
 std::string value;
 leveldb::Status s = db->Get(leveldb::ReadOptions(), key1, &value);
 if (s.ok()) {
-  leveldb::WriteBatch batch;
-  batch.Delete(key1);
-  batch.Put(key2, value);
-  s = db->Write(leveldb::WriteOptions(), &batch);
+    leveldb::WriteBatch batch;
+    batch.Delete(key1);
+    batch.Put(key2, value);
+    s = db->Write(leveldb::WriteOptions(), &batch);
 }
 ```
 
-The `WriteBatch` holds a sequence of edits to be made to the database, and these
-edits within the batch are applied in order. Note that we called Delete before
-Put so that if key1 is identical to key2, we do not end up erroneously dropping
-the value entirely.
+`WriteBatch` 中包含要对数据库进行的一系列的修改，整个 batch 中的修改会按顺序被应用。
 
-Apart from its atomicity benefits, `WriteBatch` may also be used to speed up
-bulk updates by placing lots of individual mutations into the same batch.
+batch 除了能够提供原子性以外，还用于加速 bulk updates，因为其可以将许多的单独的修改放到一个 batch 操作中。
 
 ## Synchronous Writes
-
-By default, each write to leveldb is asynchronous: it returns after pushing the
-write from the process into the operating system. The transfer from operating
-system memory to the underlying persistent storage happens asynchronously. The
-sync flag can be turned on for a particular write to make the write operation
-not return until the data being written has been pushed all the way to
-persistent storage. (On Posix systems, this is implemented by calling either
-`fsync(...)` or `fdatasync(...)` or `msync(..., MS_SYNC)` before the write
-operation returns.)
-
+默认情况下，每个对 leveldb 的写操作都是异步的: 这里会在将写的数据从进程的用户态内存拷贝到系统内存后返回，从 kernel memory 到底层的持久化存储是异步完成的。可以通过打开 sync flag, 让写操作的调用在写的数据被实际推到存储硬件之前不会返回。（在 Posix 系统中，这通常是通过在写操作返回之前调用 `fsync(...)` 或 `fdatasync(...)` 或 `msync(..., MS_SYNC)` 实现的。
 ```c++
 leveldb::WriteOptions write_options;
 write_options.sync = true;
 db->Put(write_options, ...);
 ```
 
-Asynchronous writes are often more than a thousand times as fast as synchronous
-writes. The downside of asynchronous writes is that a crash of the machine may
-cause the last few updates to be lost. Note that a crash of just the writing
-process (i.e., not a reboot) will not cause any loss since even when sync is
-false, an update is pushed from the process memory into the operating system
-before it is considered done.
+Async writes 通常比 Sync writes 快一千倍。Async write 的缺点在于，如果出现 crash 可能会导致最近几次的更新数据丢失。
+> 需要注意的是，如果仅仅是 write process crash，而不是整个机器重启的话，是不会出现丢数据的。因为即使没有设置 sync flag，更新操作也会在返回前把数据从进程内存推到内核的 cache 中。
 
-Asynchronous writes can often be used safely. For example, when loading a large
-amount of data into the database you can handle lost updates by restarting the
-bulk load after a crash. A hybrid scheme is also possible where every Nth write
-is synchronous, and in the event of a crash, the bulk load is restarted just
-after the last synchronous write finished by the previous run. (The synchronous
-write can update a marker that describes where to restart on a crash.)
+通常可以安全地使用 Async writes。例如，当将大量数据加载到数据库中时，您可以通过在崩溃后重新启动批量加载来处理丢失的更新。混合方案也是可能的，其中每个第 N 次写入都是同步的，并且在发生崩溃时，在上次运行完成最后一次同步写入后立即重新启动批量加载。 （同步写入可以更新描述崩溃时重新启动位置的标记）
 
-`WriteBatch` provides an alternative to asynchronous writes. Multiple updates
-may be placed in the same WriteBatch and applied together using a synchronous
-write (i.e., `write_options.sync` is set to true). The extra cost of the
-synchronous write will be amortized across all of the writes in the batch.
+`WriteBatch` 提供了 Async writes 的替代方案。多个更新可以 batch 成一个 WriteBatch，并使用 Sync write。这样可以将多个 Sync writes 的成本平摊到批处理中的所有写入中。
+
 
 ## Concurrency
+一个数据库一次只能被一个进程打开。leveldb 的实现通过获取一把 OS 的锁来防止误用。在单个进程中，多个并发线程可以安全地共享同一个 `leveldb::DB` 对象。即不同的线程可以在没有任何 external sync 的情况下直接进行 write 或 fetch iterators 或 Get（leveldb 的实现会自动实现所需的同步原语）。
 
-A database may only be opened by one process at a time. The leveldb
-implementation acquires a lock from the operating system to prevent misuse.
-Within a single process, the same `leveldb::DB` object may be safely shared by
-multiple concurrent threads. I.e., different threads may write into or fetch
-iterators or call Get on the same database without any external synchronization
-(the leveldb implementation will automatically do the required synchronization).
-However other objects (like Iterator and `WriteBatch`) may require external
-synchronization. If two threads share such an object, they must protect access
-to it using their own locking protocol. More details are available in the public
-header files.
+然而，其他对象（如 `Iterator` 和 `WriteBatch`）则需要外部的同步原语。如果两个线程共享这些类的对象，它们必须使用自己的 locking protocol 来保护对它的访问。
+
 
 ## Iteration
-
-The following example demonstrates how to print all key,value pairs in a
-database.
-
+下例展示如何打印出一个 db 中的所有 kv pairs:
 ```c++
 leveldb::Iterator* it = db->NewIterator(leveldb::ReadOptions());
 for (it->SeekToFirst(); it->Valid(); it->Next()) {
@@ -155,23 +103,20 @@ assert(it->status().ok());  // Check for any errors found during the scan
 delete it;
 ```
 
-The following variation shows how to process just the keys in the range
-[start,limit):
-
+下例展示了如何处理在 range [start,limit) 中的 keys:
 ```c++
 for (it->Seek(start);
-   it->Valid() && it->key().ToString() < limit;
-   it->Next()) {
+     it->Valid() && it->key().ToString() < limit;
+     it->Next())
+{
   ...
 }
 ```
 
-You can also process entries in reverse order. (Caveat: reverse iteration may be
-somewhat slower than forward iteration.)
-
+也可以逆向的遍历处理数据（但是 reverse iteration 会比 forward iteration 慢一些）
 ```c++
 for (it->SeekToLast(); it->Valid(); it->Prev()) {
-  ...
+	...
 }
 ```
 
