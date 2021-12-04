@@ -121,15 +121,9 @@ for (it->SeekToLast(); it->Valid(); it->Prev()) {
 ```
 
 ## Snapshots
+Snapshots 提供了整个 kv sotre 的 consistent read-only views。可以通过将 `ReadOptions::snapshot` 字段设置为非空，以表示对一个特定的 version 的 read。若 `ReadOptions::snapshot` 为 NULL 则表示使用当前状态的 snapshot。
 
-Snapshots provide consistent read-only views over the entire state of the
-key-value store.  `ReadOptions::snapshot` may be non-NULL to indicate that a
-read should operate on a particular version of the DB state. If
-`ReadOptions::snapshot` is NULL, the read will operate on an implicit snapshot
-of the current state.
-
-Snapshots are created by the `DB::GetSnapshot()` method:
-
+Snapshot 通过方法 `DB::GetSnapshot()` 来创建:
 ```c++
 leveldb::ReadOptions options;
 options.snapshot = db->GetSnapshot();
@@ -140,23 +134,12 @@ delete iter;
 db->ReleaseSnapshot(options.snapshot);
 ```
 
-Note that when a snapshot is no longer needed, it should be released using the
-`DB::ReleaseSnapshot` interface. This allows the implementation to get rid of
-state that was being maintained just to support reading as of that snapshot.
+当一个 snapshot 不再需要时，应通过接口 `DB::ReleaseSnapshot` 释放。这将允许回收那些仅为了支持 snapshot read 而维护的状态。
 
 ## Slice
+上文中的 `it->key()` 和 `it->value()` 返回的值的类型为 `leveldb::Slice`。Slice 本身包含一个 length 和一个指向外部 byte array 的指针。之所以选择返回 Slice 而不是 std::string 主要是，我们不希望对于那些潜在的 large key / value 作拷贝。此外，leveldb 的方法不会返回一个 null-terminated C-style string，因为 leveldb 的 key / value 本身是支持 `'\0'` bytes 的.
 
-The return value of the `it->key()` and `it->value()` calls above are instances
-of the `leveldb::Slice` type. Slice is a simple structure that contains a length
-and a pointer to an external byte array. Returning a Slice is a cheaper
-alternative to returning a `std::string` since we do not need to copy
-potentially large keys and values. In addition, leveldb methods do not return
-null-terminated C-style strings since leveldb keys and values are allowed to
-contain `'\0'` bytes.
-
-C++ strings and null-terminated C-style strings can be easily converted to a
-Slice:
-
+可以很方便的将一个 C++ string 和 null-terminated C-style string 转换为 Slice:
 ```c++
 leveldb::Slice s1 = "hello";
 
@@ -164,8 +147,7 @@ std::string str("world");
 leveldb::Slice s2 = str;
 ```
 
-A Slice can be easily converted back to a C++ string:
-
+Slice 也很容易转换为 C++ string:
 ```c++
 std::string str = s1.ToString();
 assert(str == std::string("hello"));
@@ -174,54 +156,51 @@ assert(str == std::string("hello"));
 Be careful when using Slices since it is up to the caller to ensure that the
 external byte array into which the Slice points remains live while the Slice is
 in use. For example, the following is buggy:
+使用 Slice 时需要注意的是，因为其数据部分是一个指向外部字节数组的指针，因此要保证使用时外部字节数组仍是存活的状态。
+> 例如，以下代码就会出现问题：
+> ```c++
+> leveldb::Slice slice;
+> if (...) {
+>   std::string str = ...;
+>   slice = str;
+> }
+> Use(slice);
+> ```
 
-```c++
-leveldb::Slice slice;
-if (...) {
-  std::string str = ...;
-  slice = str;
-}
-Use(slice);
-```
-
-When the if statement goes out of scope, str will be destroyed and the backing
-storage for slice will disappear.
 
 ## Comparators
+可以在打开数据库时提供一个自定义的 comparator 来对 key 排序。
 
-The preceding examples used the default ordering function for key, which orders
-bytes lexicographically. You can however supply a custom comparator when opening
-a database.  For example, suppose each database key consists of two numbers and
-we should sort by the first number, breaking ties by the second number. First,
-define a proper subclass of `leveldb::Comparator` that expresses these rules:
-
+例如，假设每个数据库键由两个数值组成，我们期望按第一个数值排序，然后再按第二个数值进一步排序。
+1. 首先，定义一个 `leveldb::Comparator` 的子类来表达这些规则：
 ```c++
-class TwoPartComparator : public leveldb::Comparator {
- public:
-  // Three-way comparison function:
-  //   if a < b: negative result
-  //   if a > b: positive result
-  //   else: zero result
-  int Compare(const leveldb::Slice& a, const leveldb::Slice& b) const {
-    int a1, a2, b1, b2;
-    ParseKey(a, &a1, &a2);
-    ParseKey(b, &b1, &b2);
-    if (a1 < b1) return -1;
-    if (a1 > b1) return +1;
-    if (a2 < b2) return -1;
-    if (a2 > b2) return +1;
-    return 0;
-  }
+class TwoPartComparator : public leveldb::Comparator
+{
+public:
+    // Three-way comparison function:
+    //   if a < b: negative result
+    //   if a > b: positive result
+    //   else: zero result
+    int Compare(const leveldb::Slice& a, const leveldb::Slice& b) const
+    {
+        int a1, a2, b1, b2;
+        ParseKey(a, &a1, &a2);
+        ParseKey(b, &b1, &b2);
+        if (a1 < b1) return -1;
+        if (a1 > b1) return +1;
+        if (a2 < b2) return -1;
+        if (a2 > b2) return +1;
+        return 0;
+    }
 
-  // Ignore the following methods for now:
-  const char* Name() const { return "TwoPartComparator"; }
-  void FindShortestSeparator(std::string*, const leveldb::Slice&) const {}
-  void FindShortSuccessor(std::string*) const {}
+    // Ignore the following methods for now:
+    const char* Name() const { return "TwoPartComparator"; }
+    void FindShortestSeparator(std::string*, const leveldb::Slice&) const {}
+    void FindShortSuccessor(std::string*) const {}
 };
 ```
 
-Now create a database using this custom comparator:
-
+2. 在建立 db 时通过 options 传入一个 comparator 的实例:
 ```c++
 TwoPartComparator cmp;
 leveldb::DB* db;
@@ -233,41 +212,23 @@ leveldb::Status status = leveldb::DB::Open(options, "/tmp/testdb", &db);
 ```
 
 ### Backwards compatibility
+comparator 的 Name() 方法的 result 会在数据库创建时被 attach 到数据库上，并在随后每次打开数据库时进行检查。如果名字改变了，`leveldb::DB::Open`调用就会失败。因此，当且仅当新的 key format 和 comparison func 与现有的数据库不兼容时，才会去改变其 name，并抛弃现有数据库的所有内容。
 
-The result of the comparator's Name method is attached to the database when it
-is created, and is checked on every subsequent database open. If the name
-changes, the `leveldb::DB::Open` call will fail. Therefore, change the name if
-and only if the new key format and comparison function are incompatible with
-existing databases, and it is ok to discard the contents of all existing
-databases.
+然而，可以通过一些 pre-planning 使得 key format 可以随着时间而改变 key format。例如，可以在每个 key 的末尾存储一个版本号（一个字节应该足以满足大多数用途）。当你想切换到一个新的 key format 时，则可以:（a）保持相同的 comparator 名称（b）将新 key 的版本号递增（c）修改 comparator 的实现，使其根据 keys 中的版本号来决定如何解析。
 
-You can however still gradually evolve your key format over time with a little
-bit of pre-planning. For example, you could store a version number at the end of
-each key (one byte should suffice for most uses). When you wish to switch to a
-new key format (e.g., adding an optional third part to the keys processed by
-`TwoPartComparator`), (a) keep the same comparator name (b) increment the
-version number for new keys (c) change the comparator function so it uses the
-version numbers found in the keys to decide how to interpret them.
 
 ## Performance
+可以通过修改 `include/options.h` 中定义的默认值来对性能进行调优。
 
-Performance can be tuned by changing the default values of the types defined in
-`include/options.h`.
 
 ### Block size
+Leveldb 会将相邻的 keys 给聚合到同一个 block 中，这样的一个 block 是与持久存储之间进行一次交互的单位。默认 block size 约为 4096 个未压缩的字节。主要的 workload 是要对数据库内容进行 bulk scan 的应用程序可能希望增加这个参数的大小。主要的 workload 是要对数据库进行大量点查的应用则可能希望该参数会小一些。
 
-leveldb groups adjacent keys together into the same block and such a block is
-the unit of transfer to and from persistent storage. The default block size is
-approximately 4096 uncompressed bytes.  Applications that mostly do bulk scans
-over the contents of the database may wish to increase this size. Applications
-that do a lot of point reads of small values may wish to switch to a smaller
-block size if performance measurements indicate an improvement. There isn't much
-benefit in using blocks smaller than one kilobyte, or larger than a few
-megabytes. Also note that compression will be more effective with larger block
-sizes.
+需要注意的是，使用小于 1KB 的 block size 或大于几 MB 的 block size 都不会有太大的益处。另请，压缩对于 block size 较大的场景会更有效。
+
 
 ### Compression
-
+每个 block 在写入到持久存储之前都经过单独压缩。默认情况下压缩是打开的，因为默认压缩方法非常快，并且对于不可压缩的数据会自动禁用。在极少数情况下，应用程序可能想要完全禁用压缩，但只有在基准测试显示性能改进时才应该这样做：
 Each block is individually compressed before being written to persistent
 storage. Compression is on by default since the default compression method is
 very fast, and is automatically disabled for uncompressible data. In rare cases,
