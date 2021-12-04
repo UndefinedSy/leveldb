@@ -228,25 +228,19 @@ Leveldb 会将相邻的 keys 给聚合到同一个 block 中，这样的一个 b
 
 
 ### Compression
-每个 block 在写入到持久存储之前都经过单独压缩。默认情况下压缩是打开的，因为默认压缩方法非常快，并且对于不可压缩的数据会自动禁用。在极少数情况下，应用程序可能想要完全禁用压缩，但只有在基准测试显示性能改进时才应该这样做：
-Each block is individually compressed before being written to persistent
-storage. Compression is on by default since the default compression method is
-very fast, and is automatically disabled for uncompressible data. In rare cases,
-applications may want to disable compression entirely, but should only do so if
-benchmarks show a performance improvement:
+每个 block 在写入到持久存储之前都会被独立地压缩。默认情况下 Compression 是打开的，默认的压缩非常快，并且对于不可压缩的数据会自动关闭。
 
+应用程序也可以完全禁用 Compression，但这只应在 benchmarks 显示这是一个性能瓶颈时才应该这样做：
 ```c++
 leveldb::Options options;
 options.compression = leveldb::kNoCompression;
-... leveldb::DB::Open(options, name, ...) ....
+...
+leveldb::DB::Open(options, name, ...)
+....
 ```
 
 ### Cache
-
-The contents of the database are stored in a set of files in the filesystem and
-each file stores a sequence of compressed blocks. If options.block_cache is
-non-NULL, it is used to cache frequently used uncompressed block contents.
-
+db 中的数据会被存储到文件系统中的文件中，每个文件会存储一堆压缩后的 blocks。如果 options.block_cache 为 non-NULL，则会 cache 那些被频繁使用的未压缩的 block 数据。
 ```c++
 #include "leveldb/cache.h"
 
@@ -259,15 +253,10 @@ delete db
 delete options.block_cache;
 ```
 
-Note that the cache holds uncompressed data, and therefore it should be sized
-according to application level data sizes, without any reduction from
-compression. (Caching of compressed blocks is left to the operating system
-buffer cache, or any custom Env implementation provided by the client.)
+cache 中保存的是未压缩的数据，因此 cache 应根据 application level 的数据大小调整其大小（即没有压缩）。
+对 compressed blocks 的 cache 是在操作系统的 buffer cache 中，或根据 client 提供的任何自定义的 Env 实现。
 
-When performing a bulk read, the application may wish to disable caching so that
-the data processed by the bulk read does not end up displacing most of the
-cached contents. A per-iterator option can be used to achieve this:
-
+在执行 bulk read 时，应用程序可能希望暂时禁用缓存，以避免 bulk read 的数据会驱逐取代大部分缓存内容。可以通过一个 per-iterator 的选项来实现此目的：
 ```c++
 leveldb::ReadOptions options;
 options.fill_cache = false;
@@ -333,37 +322,22 @@ delete options.filter_policy;
 
 
 ## Checksums
-leveldb将校验和与它存储在文件系统中的所有数据联系起来。对于如何积极地验证这些校验和，有两个单独的控制。
-leveldb associates checksums with all data it stores in the file system. There
-are two separate controls provided over how aggressively these checksums are
-verified:
+leveldb 会将 checksums 与它存储在文件系统中的数据关联起来。
 
-leveldb associates checksums with all data it stores in the file system. There are two separate controls provided over how aggressively these checksums are verified:
+对于如何主动地验证这些 checksums，有两个独立的控制:
+- `ReadOptions::verify_checksums` 为 true 时, 强制对一个 read 所引起的 file system read 的所有数据进行 checksum 验证。
+  - 默认情况下，不进行此验证。
 
-`ReadOptions::verify_checksums` may be set to true to force checksum
-verification of all data that is read from the file system on behalf of a
-particular read.  By default, no such verification is done.
+- `Options::paranoid_checks`, 可以在打开数据库之前设置为 true，以使数据库在检测到 internal corruption 时立即抛出错误。
+  - 根据数据 corruption 的部分，错误可能会在数据库打开时抛出，也可能在之后的数据库操作中抛出。
+  - 默认情况下，paranoid checking 是关闭的。
 
-`Options::paranoid_checks`可以在打开数据库之前设置为 "true"，以使数据库实现在检测到内部损坏时立即引发错误。根据数据库被破坏的部分，错误可能会在数据库被打开时引发，也可能在之后被其他数据库操作引发。默认情况下，偏执检查是关闭的，这样即使数据库的部分持久性存储被破坏，也可以使用。
 
-`Options::paranoid_checks` may be set to true before opening a database to make
-the database implementation raise an error as soon as it detects an internal
-corruption. Depending on which portion of the database has been corrupted, the
-error may be raised when the database is opened, or later by another database
-operation. By default, paranoid checking is off so that the database can be used
-even if parts of its persistent storage have been corrupted.
+如果一个数据库的数据损坏了，可以使用 `leveldb::RepairDB` 来恢复尽可能多的数据。
 
-如果一个数据库被破坏了（也许在开启偏执检查时无法打开），可以使用`leveldb::RepairDB`函数来恢复尽可能多的数据。
-
-If a database is corrupted (perhaps it cannot be opened when paranoid checking
-is turned on), the `leveldb::RepairDB` function may be used to recover as much
-of the data as possible
 
 ## Approximate Sizes
-
-The `GetApproximateSizes` method can used to get the approximate number of bytes
-of file system space used by one or more key ranges.
-
+`GetApproximateSizes` 方法用于获取一个粗略的 key ranges 所使用的 file system space 的字节数。
 ```c++
 leveldb::Range ranges[2];
 ranges[0] = leveldb::Range("a", "c");
@@ -372,18 +346,13 @@ uint64_t sizes[2];
 db->GetApproximateSizes(ranges, 2, sizes);
 ```
 
-The preceding call will set `sizes[0]` to the approximate number of bytes of
-file system space used by the key range `[a..c)` and `sizes[1]` to the
-approximate number of bytes used by the key range `[x..z)`.
+上述的调用会将 `sizes[0]` 设置为 key range `[a..c)` 使用的 file system space 的近似字节数，将 `sizes[1]` 设置为 key range `[x..z)` 使用的近似字节数。
+
 
 ## Environment
+leveldb 发起的任何文件操作（以及其他的 syscalls）都通过 `leveldb::Env` 对象进行路由。一些 clients 可能希望提供他们自己的 Env 实现，以实现更好的控制能力。
 
-All file operations (and other operating system calls) issued by the leveldb
-implementation are routed through a `leveldb::Env` object. Sophisticated clients
-may wish to provide their own Env implementation to get better control.
-For example, an application may introduce artificial delays in the file IO
-paths to limit the impact of leveldb on other activities in the system.
-
+例如，应用程序可能会在 file IO 的路径中引入人为的延迟，以限制 leveldb 对系统中其他活动的影响。
 ```c++
 class SlowEnv : public leveldb::Env {
   ... implementation of the Env interface ...
