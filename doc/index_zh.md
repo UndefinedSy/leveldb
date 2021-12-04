@@ -278,29 +278,18 @@ for (it->SeekToFirst(); it->Valid(); it->Next()) {
 ```
 
 ### Key Layout
+需要注意的是，磁盘传输和缓存的单位是一个 block。相邻的 keys 通常会被放在同一个 block 中。因此，应用程序可以通过将那些会被一起访问的 keys 放在一起，并将不经常使用的 keys 放到一个 key space 中的一个单独区域，从而提高 db 的性能。
 
-Note that the unit of disk transfer and caching is a block. Adjacent keys
-(according to the database sort order) will usually be placed in the same block.
-Therefore the application can improve its performance by placing keys that are
-accessed together near each other and placing infrequently used keys in a
-separate region of the key space.
+> 例如，假设我们想在 leveldb 之上实现一个简单的文件系统。
+> 我们可能希望存储的条目类型是：
+> - filename -> permission-bits, length, list of file_block_ids
+> - file_block_id -> data
+> 
+> 我们可能想在 `filename` keys 前加上一个字母（比如说'/'），并在 `file_block_id` keys 前加熵另一个不同的字母（比如'0'），这样在进行 scan 元数据时就不会读到并缓存那些庞大的文件内容。
 
-For example, suppose we are implementing a simple file system on top of leveldb.
-The types of entries we might wish to store are:
-
-    filename -> permission-bits, length, list of file_block_ids
-    file_block_id -> data
-
-We might want to prefix filename keys with one letter (say '/') and the
-`file_block_id` keys with a different letter (say '0') so that scans over just
-the metadata do not force us to fetch and cache bulky file contents.
 
 ### Filters
-
-Because of the way leveldb data is organized on disk, a single `Get()` call may
-involve multiple reads from disk. The optional FilterPolicy mechanism can be
-used to reduce the number of disk reads substantially.
-
+由于 leveldb 的数据在磁盘上的组织方式，一次 `Get()` 调用可能涉及到多次的磁盘读取。可以通过 FilterPolicy 机制用来大幅减少磁盘读的次数。
 ```c++
 leveldb::Options options;
 options.filter_policy = NewBloomFilterPolicy(10);
@@ -311,57 +300,51 @@ delete db;
 delete options.filter_policy;
 ```
 
-The preceding code associates a Bloom filter based filtering policy with the
-database.  Bloom filter based filtering relies on keeping some number of bits of
-data in memory per key (in this case 10 bits per key since that is the argument
-we passed to `NewBloomFilterPolicy`). This filter will reduce the number of
-unnecessary disk reads needed for Get() calls by a factor of approximately
-a 100. Increasing the bits per key will lead to a larger reduction at the cost
-of more memory usage. We recommend that applications whose working set does not
-fit in memory and that do a lot of random reads set a filter policy.
+上面的代码将一个基于 bloom filter 的 filtering policy 与数据库关联起来。基于布隆过滤器的 filtering 依赖于为每个 key 在内存中保留一定的数据（比如上述代码中通过参数制定了，每个 key 会有 10-bit）。这个过滤器将减少 Get() 调用中不必要的磁盘读取次数，大约能减少 100 倍。当然为每个 key 增加 bits 会消耗更多的内存。一般建议那些 working set 不适合在内存中使用和需要做大量随机读的应用程序设置一个 filter policy。
 
-If you are using a custom comparator, you should ensure that the filter policy
-you are using is compatible with your comparator. For example, consider a
-comparator that ignores trailing spaces when comparing keys.
-`NewBloomFilterPolicy` must not be used with such a comparator. Instead, the
-application should provide a custom filter policy that also ignores trailing
-spaces. For example:
 
-```c++
-class CustomFilterPolicy : public leveldb::FilterPolicy {
- private:
-  FilterPolicy* builtin_policy_;
+如果要使用一个自定义的 comparator，应确保所使用的 filter policy 与 comparator 兼容。
+> 例如，考虑一个 comparator，其实现会在比较 keys 时忽略尾部的空格。这种情况下 `NewBloomFilterPolicy` 就不能与这样的 comparator 一起使用。
+> 这种情况，应用程序应该提供一个自定义的 filter policy，该策略也会忽略尾部的空格。
+> 例如：
+> ```c++
+> class CustomFilterPolicy : public leveldb::FilterPolicy {
+> private:
+> 	FilterPolicy* builtin_policy_;
+> 
+> public:
+> 	CustomFilterPolicy() : builtin_policy_(NewBloomFilterPolicy(10)) {}
+> 	~CustomFilterPolicy() { delete builtin_policy_; }
+> 
+> 	const char* Name() const { return "IgnoreTrailingSpacesFilter"; }
+> 
+> 	void CreateFilter(const Slice* keys, int n, std::string* dst) const {
+> 		// Use builtin bloom filter code after removing trailing spaces
+> 		std::vector<Slice> trimmed(n);
+> 		for (int i = 0; i < n; i++) {
+> 			trimmed[i] = RemoveTrailingSpaces(keys[i]);
+> 		}
+> 		return builtin_policy_->CreateFilter(trimmed.data(), n, dst);
+> 	}
+> };
+> ```
 
- public:
-  CustomFilterPolicy() : builtin_policy_(NewBloomFilterPolicy(10)) {}
-  ~CustomFilterPolicy() { delete builtin_policy_; }
+一些应用可以提供一个不使用 Bloom filter 的过滤策略，而使用其他机制来 summarizing 一组 keys。详见`leveldb/filter_policy.h`。
 
-  const char* Name() const { return "IgnoreTrailingSpacesFilter"; }
-
-  void CreateFilter(const Slice* keys, int n, std::string* dst) const {
-    // Use builtin bloom filter code after removing trailing spaces
-    std::vector<Slice> trimmed(n);
-    for (int i = 0; i < n; i++) {
-      trimmed[i] = RemoveTrailingSpaces(keys[i]);
-    }
-    return builtin_policy_->CreateFilter(trimmed.data(), n, dst);
-  }
-};
-```
-
-Advanced applications may provide a filter policy that does not use a bloom
-filter but uses some other mechanism for summarizing a set of keys. See
-`leveldb/filter_policy.h` for detail.
 
 ## Checksums
-
+leveldb将校验和与它存储在文件系统中的所有数据联系起来。对于如何积极地验证这些校验和，有两个单独的控制。
 leveldb associates checksums with all data it stores in the file system. There
 are two separate controls provided over how aggressively these checksums are
 verified:
 
+leveldb associates checksums with all data it stores in the file system. There are two separate controls provided over how aggressively these checksums are verified:
+
 `ReadOptions::verify_checksums` may be set to true to force checksum
 verification of all data that is read from the file system on behalf of a
 particular read.  By default, no such verification is done.
+
+`Options::paranoid_checks`可以在打开数据库之前设置为 "true"，以使数据库实现在检测到内部损坏时立即引发错误。根据数据库被破坏的部分，错误可能会在数据库被打开时引发，也可能在之后被其他数据库操作引发。默认情况下，偏执检查是关闭的，这样即使数据库的部分持久性存储被破坏，也可以使用。
 
 `Options::paranoid_checks` may be set to true before opening a database to make
 the database implementation raise an error as soon as it detects an internal
@@ -369,6 +352,8 @@ corruption. Depending on which portion of the database has been corrupted, the
 error may be raised when the database is opened, or later by another database
 operation. By default, paranoid checking is off so that the database can be used
 even if parts of its persistent storage have been corrupted.
+
+如果一个数据库被破坏了（也许在开启偏执检查时无法打开），可以使用`leveldb::RepairDB`函数来恢复尽可能多的数据。
 
 If a database is corrupted (perhaps it cannot be opened when paranoid checking
 is turned on), the `leveldb::RepairDB` function may be used to recover as much
