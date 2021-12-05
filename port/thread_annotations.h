@@ -13,6 +13,7 @@
 
 #if defined(__clang__)
 
+// __attribute__ 是啥？
 #define THREAD_ANNOTATION_ATTRIBUTE__(x) __attribute__((x))
 #else
 #define THREAD_ANNOTATION_ATTRIBUTE__(x)  // no-op
@@ -20,6 +21,7 @@
 
 #endif  // !defined(THREAD_ANNOTATION_ATTRIBUTE__)
 
+// 这里 GUARDED_BY 没有实际含义，就是用来在函数签名中标识一个临界变量是由哪个 mutex 保护
 #ifndef GUARDED_BY
 #define GUARDED_BY(x) THREAD_ANNOTATION_ATTRIBUTE__(guarded_by(x))
 #endif

@@ -149,58 +149,61 @@ class HandleTable {
 
 // A single shard of sharded cache.
 class LRUCache {
- public:
-  LRUCache();
-  ~LRUCache();
+public:
+	LRUCache();
+	~LRUCache();
 
-  // Separate from constructor so caller can easily make an array of LRUCache
-  void SetCapacity(size_t capacity) { capacity_ = capacity; }
+	// Separate from constructor so caller can easily make an array of LRUCache
+	void SetCapacity(size_t capacity) { capacity_ = capacity; }
 
-  // Like Cache methods, but with an extra "hash" parameter.
-  Cache::Handle* Insert(const Slice& key, uint32_t hash, void* value,
-                        size_t charge,
-                        void (*deleter)(const Slice& key, void* value));
-  Cache::Handle* Lookup(const Slice& key, uint32_t hash);
-  void Release(Cache::Handle* handle);
-  void Erase(const Slice& key, uint32_t hash);
-  void Prune();
-  size_t TotalCharge() const {
-    MutexLock l(&mutex_);
-    return usage_;
-  }
+	// Like Cache methods, but with an extra "hash" parameter.
+	Cache::Handle* Insert(const Slice& key, uint32_t hash, void* value,
+						  size_t charge,
+						  void (*deleter)(const Slice& key, void* value));
+	Cache::Handle* Lookup(const Slice& key, uint32_t hash);
+	void Release(Cache::Handle* handle);
+	void Erase(const Slice& key, uint32_t hash);
+	void Prune();
+	size_t TotalCharge() const {
+		MutexLock l(&mutex_);
+		return usage_;
+	}
 
- private:
-  void LRU_Remove(LRUHandle* e);
-  void LRU_Append(LRUHandle* list, LRUHandle* e);
-  void Ref(LRUHandle* e);
-  void Unref(LRUHandle* e);
-  bool FinishErase(LRUHandle* e) EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+private:
+	void LRU_Remove(LRUHandle* e);
+	void LRU_Append(LRUHandle* list, LRUHandle* e);
+	void Ref(LRUHandle* e);
+	void Unref(LRUHandle* e);
+	bool FinishErase(LRUHandle* e) EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
-  // Initialized before use.
-  size_t capacity_;
+	// Initialized before use.
+	size_t capacity_;	// ？？？干啥的
 
-  // mutex_ protects the following state.
-  mutable port::Mutex mutex_;
-  size_t usage_ GUARDED_BY(mutex_);
+	// mutex_ protects the following state.
+	mutable port::Mutex mutex_;
+	size_t usage_ GUARDED_BY(mutex_);
 
-  // Dummy head of LRU list.
-  // lru.prev is newest entry, lru.next is oldest entry.
-  // Entries have refs==1 and in_cache==true.
-  LRUHandle lru_ GUARDED_BY(mutex_);
+	// Dummy head of LRU list.
+	// lru.prev is newest entry, lru.next is oldest entry.
+	// Entries have refs==1 and in_cache==true.
+	LRUHandle lru_ GUARDED_BY(mutex_);
 
-  // Dummy head of in-use list.
-  // Entries are in use by clients, and have refs >= 2 and in_cache==true.
-  LRUHandle in_use_ GUARDED_BY(mutex_);
+	// Dummy head of in-use list.
+	// Entries are in use by clients, and have refs >= 2 and in_cache==true.
+	LRUHandle in_use_ GUARDED_BY(mutex_);
 
-  HandleTable table_ GUARDED_BY(mutex_);
+	HandleTable table_ GUARDED_BY(mutex_);
 };
 
-LRUCache::LRUCache() : capacity_(0), usage_(0) {
-  // Make empty circular linked lists.
-  lru_.next = &lru_;
-  lru_.prev = &lru_;
-  in_use_.next = &in_use_;
-  in_use_.prev = &in_use_;
+LRUCache::LRUCache()
+	: capacity_(0)
+	, usage_(0) {
+
+	// Make empty circular linked lists.
+	lru_.next = &lru_;
+	lru_.prev = &lru_;
+	in_use_.next = &in_use_;
+	in_use_.prev = &in_use_;
 }
 
 LRUCache::~LRUCache() {
@@ -242,6 +245,7 @@ void LRUCache::LRU_Remove(LRUHandle* e) {
   e->prev->next = e->next;
 }
 
+// 向链表中插入一个 LRUHandle*
 void LRUCache::LRU_Append(LRUHandle* list, LRUHandle* e) {
   // Make "e" newest entry by inserting just before *list
   e->next = list;
@@ -264,43 +268,51 @@ void LRUCache::Release(Cache::Handle* handle) {
   Unref(reinterpret_cast<LRUHandle*>(handle));
 }
 
-Cache::Handle* LRUCache::Insert(const Slice& key, uint32_t hash, void* value,
-                                size_t charge,
-                                void (*deleter)(const Slice& key,
-                                                void* value)) {
-  MutexLock l(&mutex_);
+// @param key, 存储了 key 的 Slice 实例
+// @param value, 指向 value 内存的指针
+// @param charge, 这啥？？
+Cache::Handle*
+LRUCache::Insert(const Slice& key, uint32_t hash, void* value,
+				 size_t charge,
+				 void (*deleter)(const Slice& key, void* value)) {
+	MutexLock l(&mutex_);
 
-  LRUHandle* e =
-      reinterpret_cast<LRUHandle*>(malloc(sizeof(LRUHandle) - 1 + key.size()));
-  e->value = value;
-  e->deleter = deleter;
-  e->charge = charge;
-  e->key_length = key.size();
-  e->hash = hash;
-  e->in_cache = false;
-  e->refs = 1;  // for the returned handle.
-  std::memcpy(e->key_data, key.data(), key.size());
+	// -1 for what？
+	LRUHandle* e =
+		reinterpret_cast<LRUHandle*>(malloc(sizeof(LRUHandle) - 1 + key.size()));
+	e->value = value;
+	e->deleter = deleter;
+	e->charge = charge;
+	e->key_length = key.size();
+	e->hash = hash;
+	e->in_cache = false;
+	e->refs = 1;  // for the returned handle.
+	std::memcpy(e->key_data, key.data(), key.size());
 
-  if (capacity_ > 0) {
-    e->refs++;  // for the cache's reference.
-    e->in_cache = true;
-    LRU_Append(&in_use_, e);
-    usage_ += charge;
-    FinishErase(table_.Insert(e));
-  } else {  // don't cache. (capacity_==0 is supported and turns off caching.)
-    // next is read by key() in an assert, so it must be initialized
-    e->next = nullptr;
-  }
-  while (usage_ > capacity_ && lru_.next != &lru_) {
-    LRUHandle* old = lru_.next;
-    assert(old->refs == 1);
-    bool erased = FinishErase(table_.Remove(old->key(), old->hash));
-    if (!erased) {  // to avoid unused variable when compiled NDEBUG
-      assert(erased);
-    }
-  }
+	// 当前 cache 的 capacity > 0，则将该 LRUHandle 插入 cache
+	if (capacity_ > 0) {
+		e->refs++;  // for the cache's reference.
+		e->in_cache = true;
+		LRU_Append(&in_use_, e);
+		usage_ += charge;
+		FinishErase(table_.Insert(e));
+	}
+	// 这里没有 cache，可以通过让 cache 的 capacity_ == 0 来关闭 caching
+	else {  // don't cache. (capacity_==0 is supported and turns off caching.)
+		// next is read by key() in an assert, so it must be initialized
+		e->next = nullptr;
+	}
 
-  return reinterpret_cast<Cache::Handle*>(e);
+	while (usage_ > capacity_ && lru_.next != &lru_) {
+		LRUHandle* old = lru_.next;
+		assert(old->refs == 1);
+		bool erased = FinishErase(table_.Remove(old->key(), old->hash));
+		if (!erased) {  // to avoid unused variable when compiled NDEBUG
+			assert(erased);
+		}
+	}
+
+	return reinterpret_cast<Cache::Handle*>(e);
 }
 
 // If e != nullptr, finish removing *e from the cache; it has already been

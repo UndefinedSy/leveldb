@@ -43,8 +43,9 @@ struct LEVELDB_EXPORT Range {
 // A DB is a persistent ordered map from keys to values.
 // A DB is safe for concurrent access from multiple threads without
 // any external synchronization.
+// DB 是并发访问安全的，不需要任何外部的 synchronization
 class LEVELDB_EXPORT DB {
- public:
+public:
   // Open the database with the specified "name".
   // Stores a pointer to a heap-allocated database in *dbptr and returns
   // OK on success.
