@@ -27,74 +27,79 @@ class WriteBatch;
 // A Snapshot is an immutable object and can therefore be safely
 // accessed from multiple threads without any external synchronization.
 class LEVELDB_EXPORT Snapshot {
- protected:
-  virtual ~Snapshot();
+protected:
+    virtual ~Snapshot();
 };
 
 // A range of keys
 struct LEVELDB_EXPORT Range {
-  Range() = default;
-  Range(const Slice& s, const Slice& l) : start(s), limit(l) {}
+	Range() = default;
+	Range(const Slice& s, const Slice& l) : start(s), limit(l) {}
 
-  Slice start;  // Included in the range
-  Slice limit;  // Not included in the range
+	Slice start;  // Included in the range
+	Slice limit;  // Not included in the range
 };
 
-// A DB is a persistent ordered map from keys to values.
-// A DB is safe for concurrent access from multiple threads without
-// any external synchronization.
+
 // DB 是并发访问安全的，不需要任何外部的 synchronization
 class LEVELDB_EXPORT DB {
 public:
-  // Open the database with the specified "name".
-  // Stores a pointer to a heap-allocated database in *dbptr and returns
-  // OK on success.
-  // Stores nullptr in *dbptr and returns a non-OK status on error.
-  // Caller should delete *dbptr when it is no longer needed.
-  static Status Open(const Options& options, const std::string& name,
-                     DB** dbptr);
+	// 用于打开一个以 name 标识的 DB，调用者应该在不需要 DB 时 delete *dbptr
+	// 
+	// @param name[IN], 要打开的 DB 的 name
+	// @param dbptr[OUT], 存储一个指向 heap-allocated DB 的指针
+	// @return 发生错误是会返回一个 non-OK status，并且 dbptr 会是一个 nullptr
+	static Status Open(const Options& options,
+					   const std::string& name, DB** dbptr);
 
-  DB() = default;
+	DB() = default;
 
-  DB(const DB&) = delete;
-  DB& operator=(const DB&) = delete;
+	DB(const DB&) = delete;
+	DB& operator=(const DB&) = delete;
 
-  virtual ~DB();
+	virtual ~DB();
 
-  // Set the database entry for "key" to "value".  Returns OK on success,
-  // and a non-OK status on error.
-  // Note: consider setting options.sync = true.
-  virtual Status Put(const WriteOptions& options, const Slice& key,
-                     const Slice& value) = 0;
+	// Set the database entry for "key" to "value".
+	// Returns OK on success, and a non-OK status on error.
+	// Note: consider setting options.sync = true.
+	virtual Status Put(const WriteOptions& options,
+					   const Slice& key, const Slice& value) = 0;
 
-  // Remove the database entry (if any) for "key".  Returns OK on
-  // success, and a non-OK status on error.  It is not an error if "key"
-  // did not exist in the database.
-  // Note: consider setting options.sync = true.
-  virtual Status Delete(const WriteOptions& options, const Slice& key) = 0;
+	// Remove the database entry (if any) for "key".
+	// Returns OK on success, and a non-OK status on error.
+	// It is not an error if "key" did not exist in the database.
+	// Note: consider setting options.sync = true.
+	// 当 DB 中不存在传入的 key 时不被认为是一个 error
+	virtual Status Delete(const WriteOptions& options, const Slice& key) = 0;
 
-  // Apply the specified updates to the database.
-  // Returns OK on success, non-OK on failure.
-  // Note: consider setting options.sync = true.
-  virtual Status Write(const WriteOptions& options, WriteBatch* updates) = 0;
+	// Apply the specified updates to the database.
+	// Returns OK on success, non-OK on failure.
+	// Note: consider setting options.sync = true.
+	virtual Status Write(const WriteOptions& options, WriteBatch* updates) = 0;
 
-  // If the database contains an entry for "key" store the
-  // corresponding value in *value and return OK.
-  //
-  // If there is no entry for "key" leave *value unchanged and return
-  // a status for which Status::IsNotFound() returns true.
-  //
-  // May return some other Status on an error.
-  virtual Status Get(const ReadOptions& options, const Slice& key,
-                     std::string* value) = 0;
+	// If the database contains an entry for "key" store the
+	// corresponding value in *value and return OK.
+	//
+	// If there is no entry for "key" leave *value unchanged and return
+	// a status for which Status::IsNotFound() returns true.
+	//
+	// May return some other Status on an error.
+	// @param key[IN]
+	// @param value[OUT], 如果存在 key，则会在 value 中存入对应的 value
+	// 					  如果 key 不存在，则 *value 不会**修改**
+	// @return 当未发生错误，且 key 存在时返回 OK
+	// 		   当未发生错误，且 key 不存在时返回状态 Status::IsNotFound() 为 true
+	// 		   其他错误会有别的 Status
+	virtual Status Get(const ReadOptions& options,
+					   const Slice& key, std::string* value) = 0;
 
-  // Return a heap-allocated iterator over the contents of the database.
-  // The result of NewIterator() is initially invalid (caller must
-  // call one of the Seek methods on the iterator before using it).
-  //
-  // Caller should delete the iterator when it is no longer needed.
-  // The returned iterator should be deleted before this db is deleted.
-  virtual Iterator* NewIterator(const ReadOptions& options) = 0;
+	// 获取一个用于遍历 DB 的 iterator，调用者应在不再使用时 delete iterator
+	// 在 DB 被删除之前应该先将返回的 iterator 删除。
+	//
+	// @return, 返回一个遍历 DB 的 heap-allocated iterator
+	// 			NewIterator() 的结果最初是 invalid, 
+	// 			调用者必须在使用 Iterator 之前调用一个 Seek 方法。
+	virtual Iterator* NewIterator(const ReadOptions& options) = 0;
 
   // Return a handle to the current DB state.  Iterators created with
   // this handle will all observe a stable snapshot of the current DB
@@ -148,18 +153,15 @@ public:
   virtual void CompactRange(const Slice* begin, const Slice* end) = 0;
 };
 
-// Destroy the contents of the specified database.
-// Be very careful using this method.
+// 销毁指定 DB 的数据（应小心使用）
 //
-// Note: For backwards compatibility, if DestroyDB is unable to list the
-// database files, Status::OK() will still be returned masking this failure.
+// Note: 为了向后兼容，如果 DestroyDB 无法 list 数据库文件，
+// 仍会返回 Status::OK() 以 masking 该 failure。
 LEVELDB_EXPORT Status DestroyDB(const std::string& name,
                                 const Options& options);
 
-// If a DB cannot be opened, you may attempt to call this method to
-// resurrect as much of the contents of the database as possible.
-// Some data may be lost, so be careful when calling this function
-// on a database that contains important information.
+// 如果一个 DB 无法打开，可以尝试调用此方法以尽可能多地恢复数据库的内容。
+// 不过仍然会有一些数据可能丢失，因此在包含重要信息的数据库上调用此函数时要小心。
 LEVELDB_EXPORT Status RepairDB(const std::string& dbname,
                                const Options& options);
 
