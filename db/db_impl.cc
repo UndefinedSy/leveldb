@@ -124,30 +124,31 @@ static int TableCacheSize(const Options& sanitized_options) {
 }
 
 DBImpl::DBImpl(const Options& raw_options, const std::string& dbname)
-    : env_(raw_options.env),
-      internal_comparator_(raw_options.comparator),
-      internal_filter_policy_(raw_options.filter_policy),
-      options_(SanitizeOptions(dbname, &internal_comparator_,
-                               &internal_filter_policy_, raw_options)),
-      owns_info_log_(options_.info_log != raw_options.info_log),
-      owns_cache_(options_.block_cache != raw_options.block_cache),
-      dbname_(dbname),
-      table_cache_(new TableCache(dbname_, options_, TableCacheSize(options_))),
-      db_lock_(nullptr),
-      shutting_down_(false),
-      background_work_finished_signal_(&mutex_),
-      mem_(nullptr),
-      imm_(nullptr),
-      has_imm_(false),
-      logfile_(nullptr),
-      logfile_number_(0),
-      log_(nullptr),
-      seed_(0),
-      tmp_batch_(new WriteBatch),
-      background_compaction_scheduled_(false),
-      manual_compaction_(nullptr),
-      versions_(new VersionSet(dbname_, &options_, table_cache_,
-                               &internal_comparator_)) {}
+    : env_(raw_options.env)
+    , internal_comparator_(raw_options.comparator)
+    , internal_filter_policy_(raw_options.filter_policy)
+    , options_(SanitizeOptions(dbname, &internal_comparator_,
+                               &internal_filter_policy_, raw_options))
+    , owns_info_log_(options_.info_log != raw_options.info_log)
+    , owns_cache_(options_.block_cache != raw_options.block_cache)
+    , dbname_(dbname)
+    , table_cache_(new TableCache(dbname_, options_, TableCacheSize(options_)))
+    , db_lock_(nullptr)
+    , shutting_down_(false)
+    , background_work_finished_signal_(&mutex_)
+    , mem_(nullptr)
+    , imm_(nullptr)
+    , has_imm_(false)
+    , logfile_(nullptr)
+    , logfile_number_(0)
+    , log_(nullptr)
+    , seed_(0)
+    , tmp_batch_(new WriteBatch)
+    , background_compaction_scheduled_(false)
+    , manual_compaction_(nullptr)
+    , versions_(new VersionSet(dbname_, &options_, table_cache_,
+                               &internal_comparator_))
+    {}
 
 DBImpl::~DBImpl() {
   // Wait for background work to finish.
@@ -1480,47 +1481,50 @@ Status DB::Delete(const WriteOptions& opt, const Slice& key) {
 
 DB::~DB() = default;
 
-Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
-  *dbptr = nullptr;
+Status
+DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
+    *dbptr = nullptr;
 
-  DBImpl* impl = new DBImpl(options, dbname);
-  impl->mutex_.Lock();
-  VersionEdit edit;
-  // Recover handles create_if_missing, error_if_exists
-  bool save_manifest = false;
-  Status s = impl->Recover(&edit, &save_manifest);
-  if (s.ok() && impl->mem_ == nullptr) {
-    // Create new log and a corresponding memtable.
-    uint64_t new_log_number = impl->versions_->NewFileNumber();
-    WritableFile* lfile;
-    s = options.env->NewWritableFile(LogFileName(dbname, new_log_number),
-                                     &lfile);
-    if (s.ok()) {
-      edit.SetLogNumber(new_log_number);
-      impl->logfile_ = lfile;
-      impl->logfile_number_ = new_log_number;
-      impl->log_ = new log::Writer(lfile);
-      impl->mem_ = new MemTable(impl->internal_comparator_);
-      impl->mem_->Ref();
+    DBImpl* impl = new DBImpl(options, dbname);
+
+    impl->mutex_.Lock();    // why need lock here?
+    VersionEdit edit;
+    // Recover handles create_if_missing, error_if_exists
+    bool save_manifest = false;
+    Status s = impl->Recover(&edit, &save_manifest);
+    if (s.ok() && impl->mem_ == nullptr) {
+        // Create new log and a corresponding memtable.
+        uint64_t new_log_number = impl->versions_->NewFileNumber();
+        WritableFile* lfile;
+        s = options.env->NewWritableFile(LogFileName(dbname, new_log_number),
+                                        &lfile);
+        if (s.ok()) {
+            edit.SetLogNumber(new_log_number);
+            impl->logfile_ = lfile;
+            impl->logfile_number_ = new_log_number;
+            impl->log_ = new log::Writer(lfile);
+            impl->mem_ = new MemTable(impl->internal_comparator_);
+            impl->mem_->Ref();
+        }
     }
-  }
-  if (s.ok() && save_manifest) {
-    edit.SetPrevLogNumber(0);  // No older logs needed after recovery.
-    edit.SetLogNumber(impl->logfile_number_);
-    s = impl->versions_->LogAndApply(&edit, &impl->mutex_);
-  }
-  if (s.ok()) {
-    impl->RemoveObsoleteFiles();
-    impl->MaybeScheduleCompaction();
-  }
-  impl->mutex_.Unlock();
-  if (s.ok()) {
-    assert(impl->mem_ != nullptr);
-    *dbptr = impl;
-  } else {
-    delete impl;
-  }
-  return s;
+    if (s.ok() && save_manifest) {
+        edit.SetPrevLogNumber(0);  // No older logs needed after recovery.
+        edit.SetLogNumber(impl->logfile_number_);
+        s = impl->versions_->LogAndApply(&edit, &impl->mutex_);
+    }
+    if (s.ok()) {
+        impl->RemoveObsoleteFiles();
+        impl->MaybeScheduleCompaction();
+    }
+    impl->mutex_.Unlock();
+
+    if (s.ok()) {
+        assert(impl->mem_ != nullptr);
+        *dbptr = impl;
+    } else {
+        delete impl;
+    }
+    return s;
 }
 
 Snapshot::~Snapshot() = default;

@@ -101,11 +101,10 @@ public:
 	// 			调用者必须在使用 Iterator 之前调用一个 Seek 方法。
 	virtual Iterator* NewIterator(const ReadOptions& options) = 0;
 
-  // Return a handle to the current DB state.  Iterators created with
-  // this handle will all observe a stable snapshot of the current DB
-  // state.  The caller must call ReleaseSnapshot(result) when the
-  // snapshot is no longer needed.
-  virtual const Snapshot* GetSnapshot() = 0;
+    // 返回一个当前 DB 状态的 handle
+    // 在这个 handle 上创建的 Iterator 会看到一个 stable snapshot
+    // 当这个 snapshot 不再需要时应调用 ReleaseSnapshot(result)
+    virtual const Snapshot* GetSnapshot() = 0;
 
   // Release a previously acquired snapshot.  The caller must not
   // use "snapshot" after this call.

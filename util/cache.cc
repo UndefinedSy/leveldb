@@ -37,29 +37,45 @@ namespace {
 // Elements are moved between these lists by the Ref() and Unref() methods,
 // when they detect an element in the cache acquiring or losing its only
 // external reference.
+// 
+// 一个 Cache 中有两条关于 cached items 的链表。
+// Cache 中的任意一个 item 或者在一个链表上，或着在另一个链表上，但不会出现同时在两条链表上。
+// 对于那些已经 erased，但仍然有 client ref 的 Items 不在 cache 的任何一个链表中。
+// 这两个链表是:
+// - in-use: 这个链表上事那些当前有 client ref 的 items，没有特定的顺序。
+//           (这个链表用于 invariant checking。如果我们不做这个检查，
+//            本来在这个链表上的元素可能会被当作 disconnected singleton lists 留下）。
+// - LRU: 当前没有 client ref 的 items，按照 LRU 顺序排序
+// 当检测到 cache 中的 items 获得或失去其唯一的外部 ref 时，会通过 Ref() 和 Unref() 在这两个链表之间移动 items。
 
 // An entry is a variable length heap-allocated structure.  Entries
 // are kept in a circular doubly linked list ordered by access time.
+// 一个 entry 是一个可变长的堆上结构。
+// Entries 被维护在一个环形双向链表上，根据访问时间排序。
 struct LRUHandle {
-  void* value;
-  void (*deleter)(const Slice&, void* value);
-  LRUHandle* next_hash;
-  LRUHandle* next;
-  LRUHandle* prev;
-  size_t charge;  // TODO(opt): Only allow uint32_t?
-  size_t key_length;
-  bool in_cache;     // Whether entry is in the cache.
-  uint32_t refs;     // References, including cache reference, if present.
-  uint32_t hash;     // Hash of key(); used for fast sharding and comparisons
-  char key_data[1];  // Beginning of key
+    void* value;
+    void (*deleter)(const Slice&, void* value);
+    LRUHandle* next_hash;   // 这个是指向 hash 碰撞的元素
+    LRUHandle* next;
+    LRUHandle* prev;
+    size_t charge;  // TODO(opt): Only allow uint32_t?
+    size_t key_length;
 
-  Slice key() const {
-    // next_ is only equal to this if the LRU handle is the list head of an
-    // empty list. List heads never have meaningful keys.
-    assert(next != this);
+    // 标识 Cache 是否持有该 entry 的 reference
+    // 该 entry 没有传递给其 "deleter" 的情况下，唯一能使 in_cache 为 false 的场景时是:
+    // Erase(); 当一个有着 duplicate key 的元素被插入时 Insert(); 或 cache 的 destruction 时。
+    bool in_cache;     // Whether entry is in the cache.
+    uint32_t refs;     // References, including cache reference, if present.
+    uint32_t hash;     // Hash of key(); used for fast sharding and comparisons
+    char key_data[1];  // Beginning of key
 
-    return Slice(key_data, key_length);
-  }
+    Slice key() const {
+        // next_ is only equal to this if the LRU handle is the list head of an
+        // empty list. List heads never have meaningful keys.
+        assert(next != this);
+
+        return Slice(key_data, key_length);
+    }
 };
 
 // We provide our own simple hash table since it removes a whole bunch
@@ -184,7 +200,8 @@ private:
 	size_t usage_ GUARDED_BY(mutex_);
 
 	// Dummy head of LRU list.
-	// lru.prev is newest entry, lru.next is oldest entry.
+    // - lru.prev is newest entry
+    // - lru.next is oldest entry.
 	// Entries have refs==1 and in_cache==true.
 	LRUHandle lru_ GUARDED_BY(mutex_);
 
@@ -247,11 +264,11 @@ void LRUCache::LRU_Remove(LRUHandle* e) {
 
 // 向链表中插入一个 LRUHandle*
 void LRUCache::LRU_Append(LRUHandle* list, LRUHandle* e) {
-  // Make "e" newest entry by inserting just before *list
-  e->next = list;
-  e->prev = list->prev;
-  e->prev->next = e;
-  e->next->prev = e;
+    // Make "e" newest entry by inserting just before *list
+    e->next = list;
+    e->prev = list->prev;
+    e->prev->next = e;
+    e->next->prev = e;
 }
 
 Cache::Handle* LRUCache::Lookup(const Slice& key, uint32_t hash) {
@@ -297,7 +314,7 @@ LRUCache::Insert(const Slice& key, uint32_t hash, void* value,
 		usage_ += charge;
 		FinishErase(table_.Insert(e));
 	}
-	// 这里没有 cache，可以通过让 cache 的 capacity_ == 0 来关闭 caching
+	// 这里不进行 cache，可以通过让 cache 的 capacity_ == 0 来关闭 caching
 	else {  // don't cache. (capacity_==0 is supported and turns off caching.)
 		// next is read by key() in an assert, so it must be initialized
 		e->next = nullptr;
@@ -348,62 +365,70 @@ void LRUCache::Prune() {
 static const int kNumShardBits = 4;
 static const int kNumShards = 1 << kNumShardBits;
 
+// 一个 customer-facing 的 LRUCache 实际上是 ShardedLRUCache
+// 一个 ShardedLRUCache 包含 16 个分片，以提高对 LRUCache 访问的并行度
 class ShardedLRUCache : public Cache {
- private:
-  LRUCache shard_[kNumShards];
-  port::Mutex id_mutex_;
-  uint64_t last_id_;
+private:
+    LRUCache shard_[kNumShards];
+    port::Mutex id_mutex_;
+    uint64_t last_id_;  // whats this???
 
-  static inline uint32_t HashSlice(const Slice& s) {
-    return Hash(s.data(), s.size(), 0);
-  }
+    static inline uint32_t HashSlice(const Slice& s) {
+        return Hash(s.data(), s.size(), 0);
+    }
 
-  static uint32_t Shard(uint32_t hash) { return hash >> (32 - kNumShardBits); }
+    static uint32_t Shard(uint32_t hash) { return hash >> (32 - kNumShardBits); }
 
- public:
-  explicit ShardedLRUCache(size_t capacity) : last_id_(0) {
-    const size_t per_shard = (capacity + (kNumShards - 1)) / kNumShards;
-    for (int s = 0; s < kNumShards; s++) {
-      shard_[s].SetCapacity(per_shard);
+public:
+    explicit ShardedLRUCache(size_t capacity)
+        : last_id_(0)
+    {
+        // 向上取整，得到满足 capacity 的每个 shard 的容量
+        const size_t per_shard = (capacity + (kNumShards - 1)) / kNumShards;
+        for (int s = 0; s < kNumShards; s++) {
+            shard_[s].SetCapacity(per_shard);
+        }
     }
-  }
-  ~ShardedLRUCache() override {}
-  Handle* Insert(const Slice& key, void* value, size_t charge,
-                 void (*deleter)(const Slice& key, void* value)) override {
-    const uint32_t hash = HashSlice(key);
-    return shard_[Shard(hash)].Insert(key, hash, value, charge, deleter);
-  }
-  Handle* Lookup(const Slice& key) override {
-    const uint32_t hash = HashSlice(key);
-    return shard_[Shard(hash)].Lookup(key, hash);
-  }
-  void Release(Handle* handle) override {
-    LRUHandle* h = reinterpret_cast<LRUHandle*>(handle);
-    shard_[Shard(h->hash)].Release(handle);
-  }
-  void Erase(const Slice& key) override {
-    const uint32_t hash = HashSlice(key);
-    shard_[Shard(hash)].Erase(key, hash);
-  }
-  void* Value(Handle* handle) override {
-    return reinterpret_cast<LRUHandle*>(handle)->value;
-  }
-  uint64_t NewId() override {
-    MutexLock l(&id_mutex_);
-    return ++(last_id_);
-  }
-  void Prune() override {
-    for (int s = 0; s < kNumShards; s++) {
-      shard_[s].Prune();
+    ~ShardedLRUCache() override {}
+
+    // 根据一个 key 的 hash value 高 kNumShardBits 个 bit 决定使用哪个 LRUCache
+    Handle* Insert(const Slice& key, void* value, size_t charge,
+                   void (*deleter)(const Slice& key, void* value)) override
+    {
+        const uint32_t hash = HashSlice(key);
+        return shard_[Shard(hash)].Insert(key, hash, value, charge, deleter);
     }
-  }
-  size_t TotalCharge() const override {
-    size_t total = 0;
-    for (int s = 0; s < kNumShards; s++) {
-      total += shard_[s].TotalCharge();
+    Handle* Lookup(const Slice& key) override {
+        const uint32_t hash = HashSlice(key);
+        return shard_[Shard(hash)].Lookup(key, hash);
     }
-    return total;
-  }
+    void Release(Handle* handle) override {
+        LRUHandle* h = reinterpret_cast<LRUHandle*>(handle);
+        shard_[Shard(h->hash)].Release(handle);
+    }
+    void Erase(const Slice& key) override {
+        const uint32_t hash = HashSlice(key);
+        shard_[Shard(hash)].Erase(key, hash);
+    }
+    void* Value(Handle* handle) override {
+        return reinterpret_cast<LRUHandle*>(handle)->value;
+    }
+    uint64_t NewId() override {
+        MutexLock l(&id_mutex_);
+        return ++(last_id_);
+    }
+    void Prune() override {
+        for (int s = 0; s < kNumShards; s++) {
+            shard_[s].Prune();
+        }
+    }
+    size_t TotalCharge() const override {
+        size_t total = 0;
+        for (int s = 0; s < kNumShards; s++) {
+            total += shard_[s].TotalCharge();
+        }
+        return total;
+    }
 };
 
 }  // end anonymous namespace
