@@ -46,6 +46,7 @@ std::string SSTTableFileName(const std::string& dbname, uint64_t number);
 // Return the name of the descriptor file for the db named by
 // "dbname" and the specified incarnation number.  The result will be
 // prefixed with "dbname".
+// DescriptorFileName 为 <dbname>//MANIFEST-<number> 其中 <number> 中是 %06llu
 std::string DescriptorFileName(const std::string& dbname, uint64_t number);
 
 // Return the name of the current file.  This file contains the name

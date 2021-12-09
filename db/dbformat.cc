@@ -19,8 +19,8 @@ static uint64_t PackSequenceAndType(uint64_t seq, ValueType t) {
 }
 
 void AppendInternalKey(std::string* result, const ParsedInternalKey& key) {
-  result->append(key.user_key.data(), key.user_key.size());
-  PutFixed64(result, PackSequenceAndType(key.sequence, key.type));
+    result->append(key.user_key.data(), key.user_key.size());
+    PutFixed64(result, PackSequenceAndType(key.sequence, key.type));
 }
 
 std::string ParsedInternalKey::DebugString() const {

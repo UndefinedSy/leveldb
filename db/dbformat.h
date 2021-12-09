@@ -66,15 +66,16 @@ typedef uint64_t SequenceNumber;
 // can be packed together into 64-bits.
 static const SequenceNumber kMaxSequenceNumber = ((0x1ull << 56) - 1);
 
+// Exactly Parsed InternalKey 
 struct ParsedInternalKey {
-  Slice user_key;
-  SequenceNumber sequence;
-  ValueType type;
+    Slice user_key;
+    SequenceNumber sequence;
+    ValueType type;
 
-  ParsedInternalKey() {}  // Intentionally left uninitialized (for speed)
-  ParsedInternalKey(const Slice& u, const SequenceNumber& seq, ValueType t)
-      : user_key(u), sequence(seq), type(t) {}
-  std::string DebugString() const;
+    ParsedInternalKey() {}  // Intentionally left uninitialized (for speed)
+    ParsedInternalKey(const Slice& u, const SequenceNumber& seq, ValueType t)
+        : user_key(u), sequence(seq), type(t) {}
+    std::string DebugString() const;
 };
 
 // Return the length of the encoding of "key".
@@ -99,21 +100,22 @@ inline Slice ExtractUserKey(const Slice& internal_key) {
 
 // A comparator for internal keys that uses a specified comparator for
 // the user key portion and breaks ties by decreasing sequence number.
+// 对 user key 进行比较，并通过 sequence number 进行降序排序
 class InternalKeyComparator : public Comparator {
- private:
-  const Comparator* user_comparator_;
+private:
+    const Comparator* user_comparator_;
 
- public:
-  explicit InternalKeyComparator(const Comparator* c) : user_comparator_(c) {}
-  const char* Name() const override;
-  int Compare(const Slice& a, const Slice& b) const override;
-  void FindShortestSeparator(std::string* start,
-                             const Slice& limit) const override;
-  void FindShortSuccessor(std::string* key) const override;
+public:
+    explicit InternalKeyComparator(const Comparator* c) : user_comparator_(c) {}
+    const char* Name() const override;
+    int Compare(const Slice& a, const Slice& b) const override;
+    void FindShortestSeparator(std::string* start,
+                                const Slice& limit) const override;
+    void FindShortSuccessor(std::string* key) const override;
 
-  const Comparator* user_comparator() const { return user_comparator_; }
+    const Comparator* user_comparator() const { return user_comparator_; }
 
-  int Compare(const InternalKey& a, const InternalKey& b) const;
+    int Compare(const InternalKey& a, const InternalKey& b) const;
 };
 
 // Filter policy wrapper that converts from internal keys to user keys
@@ -132,35 +134,40 @@ class InternalFilterPolicy : public FilterPolicy {
 // the following class instead of plain strings so that we do not
 // incorrectly use string comparisons instead of an InternalKeyComparator.
 class InternalKey {
- private:
-  std::string rep_;
+// +--------------------+---------------+------------+
+// |  user_key(string)  |  seq_num(7B)  |  type(1B)  |
+// +--------------------+---------------+------------+
+private:
 
- public:
-  InternalKey() {}  // Leave rep_ as empty to indicate it is invalid
-  InternalKey(const Slice& user_key, SequenceNumber s, ValueType t) {
-    AppendInternalKey(&rep_, ParsedInternalKey(user_key, s, t));
-  }
+    std::string rep_;   // rep_ 为空表示 invalid
 
-  bool DecodeFrom(const Slice& s) {
-    rep_.assign(s.data(), s.size());
-    return !rep_.empty();
-  }
+public:
+    InternalKey() {}  // Leave rep_ as empty to indicate it is invalid
+    InternalKey(const Slice& user_key, SequenceNumber s, ValueType t) {
+        AppendInternalKey(&rep_, ParsedInternalKey(user_key, s, t));
+    }
 
-  Slice Encode() const {
-    assert(!rep_.empty());
-    return rep_;
-  }
+    // 用 Slice s 给 InternalKey 赋值并返回是否为空?
+    bool DecodeFrom(const Slice& s) {
+        rep_.assign(s.data(), s.size());
+        return !rep_.empty();
+    }
 
-  Slice user_key() const { return ExtractUserKey(rep_); }
+    Slice Encode() const {
+        assert(!rep_.empty());
+        return rep_;
+    }
 
-  void SetFrom(const ParsedInternalKey& p) {
-    rep_.clear();
-    AppendInternalKey(&rep_, p);
-  }
+    Slice user_key() const { return ExtractUserKey(rep_); }
 
-  void Clear() { rep_.clear(); }
+    void SetFrom(const ParsedInternalKey& p) {
+        rep_.clear();
+        AppendInternalKey(&rep_, p);
+    }
 
-  std::string DebugString() const;
+    void Clear() { rep_.clear(); }
+
+    std::string DebugString() const;
 };
 
 inline int InternalKeyComparator::Compare(const InternalKey& a,
