@@ -94,8 +94,8 @@ bool ParseInternalKey(const Slice& internal_key, ParsedInternalKey* result);
 
 // Returns the user key portion of an internal key.
 inline Slice ExtractUserKey(const Slice& internal_key) {
-  assert(internal_key.size() >= 8);
-  return Slice(internal_key.data(), internal_key.size() - 8);
+	assert(internal_key.size() >= 8);
+	return Slice(internal_key.data(), internal_key.size() - 8);
 }
 
 // A comparator for internal keys that uses a specified comparator for
@@ -134,6 +134,7 @@ class InternalFilterPolicy : public FilterPolicy {
 // the following class instead of plain strings so that we do not
 // incorrectly use string comparisons instead of an InternalKeyComparator.
 class InternalKey {
+// rep_:
 // +--------------------+---------------+------------+
 // |  user_key(string)  |  seq_num(7B)  |  type(1B)  |
 // +--------------------+---------------+------------+
@@ -187,39 +188,46 @@ inline bool ParseInternalKey(const Slice& internal_key,
   return (c <= static_cast<uint8_t>(kTypeValue));
 }
 
-// A helper class useful for DBImpl::Get()
+// A helper class useful for DBImpl::Get(), 用于 Get() 的 Key
 class LookupKey {
- public:
-  // Initialize *this for looking up user_key at a snapshot with
-  // the specified sequence number.
-  LookupKey(const Slice& user_key, SequenceNumber sequence);
+public:
+	// Initialize *this for looking up user_key at a snapshot with
+	// the specified sequence number.
+	LookupKey(const Slice& user_key, SequenceNumber sequence);
 
-  LookupKey(const LookupKey&) = delete;
-  LookupKey& operator=(const LookupKey&) = delete;
+	LookupKey(const LookupKey&) = delete;
+	LookupKey& operator=(const LookupKey&) = delete;
 
-  ~LookupKey();
+	~LookupKey();
 
-  // Return a key suitable for lookup in a MemTable.
-  Slice memtable_key() const { return Slice(start_, end_ - start_); }
+	// Return a key suitable for lookup in a MemTable.
+	// memtable_key 是整个 LookupKey
+	Slice memtable_key() const { return Slice(start_, end_ - start_); }
 
-  // Return an internal key (suitable for passing to an internal iterator)
-  Slice internal_key() const { return Slice(kstart_, end_ - kstart_); }
+	// Return an internal key (suitable for passing to an internal iterator)
+	// internal_key 是去掉 klength 的部分
+	Slice internal_key() const { return Slice(kstart_, end_ - kstart_); }
 
-  // Return the user key
-  Slice user_key() const { return Slice(kstart_, end_ - kstart_ - 8); }
+	// Return the user key
+	Slice user_key() const { return Slice(kstart_, end_ - kstart_ - 8); }
 
- private:
-  // We construct a char array of the form:
-  //    klength  varint32               <-- start_
-  //    userkey  char[klength]          <-- kstart_
-  //    tag      uint64
-  //                                    <-- end_
-  // The array is a suitable MemTable key.
-  // The suffix starting with "userkey" can be used as an InternalKey.
-  const char* start_;
-  const char* kstart_;
-  const char* end_;
-  char space_[200];  // Avoid allocation for short keys
+private:
+	// LookupKey 的组成如下，即 userkey length + InternalKey.
+	// +--------------------------+	<-- start_
+	// |  klength  varint32       |
+	// +--------------------------+ <-- kstart_
+	// |  userkey  char[klength]  |
+	// +--------------------------+ <-- end_
+	// |  tag      uint64		  |
+	// +--------------------------+
+	//                              
+	// The array is a suitable MemTable key.
+	// The suffix starting with "userkey" can be used as an InternalKey.
+	const char* start_;
+	const char* kstart_;
+	const char* end_;
+	// LookupKey 会在栈上分配 200 个字节，以避免为 short keys 分配内存
+	char space_[200];  // Avoid allocation for short keys
 };
 
 inline LookupKey::~LookupKey() {
