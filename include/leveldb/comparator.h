@@ -39,18 +39,17 @@ public:
     // 以 "leveldb" 起始的 Names 是保留字，不应被使用
     virtual const char* Name() const = 0;
 
-    // Advanced functions: these are used to reduce the space requirements
-    // for internal data structures like index blocks.
+    // Advanced Functions:
+    // 用于减少如 index blocks 之类的数据结构的空间消耗
+    // 其中的 *start 和 *key 参数都是 [IN OUT] 的
 
-    // If *start < limit, changes *start to a short string in [start,limit).
-    // Simple comparator implementations may return with *start unchanged,
-    // i.e., an implementation of this method that does nothing is correct.
+    // 如果 *start < limit，就在 [start, limit) 中找到一个 short string 并赋给 *start 返回
+    // 一个简单的 Comparator 实现可能不会改变 *start
     virtual void FindShortestSeparator(std::string* start,
                                       const Slice& limit) const = 0;
 
-    // Changes *key to a short string >= *key.
-    // Simple comparator implementations may return with *key unchanged,
-    // i.e., an implementation of this method that does nothing is correct.
+    // 找一个 >= *key 的 short string, 并赋给 key 返回
+    // 一个简单的 Comparator 实现可能不改变 *key
     virtual void FindShortSuccessor(std::string* key) const = 0;
 };
 

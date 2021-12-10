@@ -13,9 +13,9 @@
 namespace leveldb {
 
 static uint64_t PackSequenceAndType(uint64_t seq, ValueType t) {
-  assert(seq <= kMaxSequenceNumber);
-  assert(t <= kValueTypeForSeek);
-  return (seq << 8) | t;
+    assert(seq <= kMaxSequenceNumber);
+    assert(t <= kValueTypeForSeek);
+    return (seq << 8) | t;
 }
 
 void AppendInternalKey(std::string* result, const ParsedInternalKey& key) {
@@ -44,39 +44,40 @@ const char* InternalKeyComparator::Name() const {
   return "leveldb.InternalKeyComparator";
 }
 
+// InternalKey 的比较顺位:
+// - 首先是按照 user key(根据用户提供的 comparator) 进行升序排序
+// - 其次是 sequence number 降序排序
+// - 最后根据 type 降序排序
 int InternalKeyComparator::Compare(const Slice& akey, const Slice& bkey) const {
-  // Order by:
-  //    increasing user key (according to user-supplied comparator)
-  //    decreasing sequence number
-  //    decreasing type (though sequence# should be enough to disambiguate)
-  int r = user_comparator_->Compare(ExtractUserKey(akey), ExtractUserKey(bkey));
-  if (r == 0) {
-    const uint64_t anum = DecodeFixed64(akey.data() + akey.size() - 8);
-    const uint64_t bnum = DecodeFixed64(bkey.data() + bkey.size() - 8);
-    if (anum > bnum) {
-      r = -1;
-    } else if (anum < bnum) {
-      r = +1;
+    int r = user_comparator_->Compare(ExtractUserKey(akey), ExtractUserKey(bkey));
+    if (r == 0) {
+        const uint64_t anum = DecodeFixed64(akey.data() + akey.size() - 8);
+        const uint64_t bnum = DecodeFixed64(bkey.data() + bkey.size() - 8);
+        if (anum > bnum) {
+            r = -1;
+        } else if (anum < bnum) {
+            r = +1;
+        }
     }
-  }
-  return r;
+    return r;
 }
 
 // TODO
 void InternalKeyComparator::FindShortestSeparator(std::string* start,
                                                   const Slice& limit) const {
-	// Attempt to shorten the user portion of the key
+    // 先尝试用 user_comparator_ 更新 userkey 部分
 	Slice user_start = ExtractUserKey(*start);
 	Slice user_limit = ExtractUserKey(limit);
 	std::string tmp(user_start.data(), user_start.size());
 	user_comparator_->FindShortestSeparator(&tmp, user_limit);
+
+    // 如果 userkey 长度被截短, 但其在逻辑空间上变大了
 	if (tmp.size() < user_start.size()
 		&& user_comparator_->Compare(user_start, tmp) < 0)
 	{
 		// User key has become shorter physically, but larger logically.
 		// Tack on the earliest possible number to the shortened user key.
-		PutFixed64(&tmp,
-				PackSequenceAndType(kMaxSequenceNumber, kValueTypeForSeek));
+		PutFixed64(&tmp, PackSequenceAndType(kMaxSequenceNumber, kValueTypeForSeek));
 		assert(this->Compare(*start, tmp) < 0);
 		assert(this->Compare(tmp, limit) < 0);
 		start->swap(tmp);
