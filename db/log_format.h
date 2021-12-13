@@ -24,9 +24,15 @@ enum RecordType {
 };
 static const int kMaxRecordType = kLastType;
 
+// 每个 logblock 为一个 32KB 的块
 static const int kBlockSize = 32768;
 
 // Header is checksum (4 bytes), length (2 bytes), type (1 byte).
+// ```
+// +--------------+------------+-----------+
+// | checksum(4B) | length(2B) | type (1B) |
+// +--------------+------------+-----------+
+// ```
 static const int kHeaderSize = 4 + 2 + 1;
 
 }  // namespace log

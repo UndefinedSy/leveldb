@@ -13,98 +13,125 @@
 namespace leveldb {
 namespace log {
 
-static void InitTypeCrc(uint32_t* type_crc) {
-  for (int i = 0; i <= kMaxRecordType; i++) {
-    char t = static_cast<char>(i);
-    type_crc[i] = crc32c::Value(&t, 1);
-  }
+static void
+InitTypeCrc(uint32_t* type_crc)
+{
+	for (int i = 0; i <= kMaxRecordType; i++)
+	{
+		char t = static_cast<char>(i);
+		type_crc[i] = crc32c::Value(&t, 1);
+	}
 }
 
-Writer::Writer(WritableFile* dest) : dest_(dest), block_offset_(0) {
-  InitTypeCrc(type_crc_);
+Writer::Writer(WritableFile* dest)
+  : dest_(dest), block_offset_(0) 
+{
+    InitTypeCrc(type_crc_);
 }
 
 Writer::Writer(WritableFile* dest, uint64_t dest_length)
-    : dest_(dest), block_offset_(dest_length % kBlockSize) {
-  InitTypeCrc(type_crc_);
+    : dest_(dest), block_offset_(dest_length % kBlockSize)
+{
+	InitTypeCrc(type_crc_);
 }
 
 Writer::~Writer() = default;
 
-Status Writer::AddRecord(const Slice& slice) {
-  const char* ptr = slice.data();
-  size_t left = slice.size();
+Status
+Writer::AddRecord(const Slice& slice)
+{
+	const char* ptr = slice.data();
+	size_t left = slice.size();
 
-  // Fragment the record if necessary and emit it.  Note that if slice
-  // is empty, we still want to iterate once to emit a single
-  // zero-length record
-  Status s;
-  bool begin = true;
-  do {
-    const int leftover = kBlockSize - block_offset_;
-    assert(leftover >= 0);
-    if (leftover < kHeaderSize) {
-      // Switch to a new block
-      if (leftover > 0) {
-        // Fill the trailer (literal below relies on kHeaderSize being 7)
-        static_assert(kHeaderSize == 7, "");
-        dest_->Append(Slice("\x00\x00\x00\x00\x00\x00", leftover));
-      }
-      block_offset_ = 0;
-    }
+	// Fragment the record if necessary and emit it.
+	// 尝试对这个 record 做 fragment，并发出写请求
+	// 如果 slice 为空，我们仍然希望迭代一次，以发起一个 zero-length 的记录
+	Status s;
+	bool begin = true;
+	do
+	{
+		// 当前 block 剩余 size
+		const int leftover = kBlockSize - block_offset_;
+		assert(leftover >= 0);
 
-    // Invariant: we never leave < kHeaderSize bytes in a block.
-    assert(kBlockSize - block_offset_ - kHeaderSize >= 0);
+		// 如果当前 block 剩余大小 < 7 则填 0
+		if (leftover < kHeaderSize)
+		{
+			// Switch to a new block
+			if (leftover > 0)
+			{
+				// Fill the trailer (literal below relies on kHeaderSize being 7)
+				static_assert(kHeaderSize == 7, "");
+				dest_->Append(Slice("\x00\x00\x00\x00\x00\x00", leftover));
+			}
+			block_offset_ = 0;
+		}
 
-    const size_t avail = kBlockSize - block_offset_ - kHeaderSize;
-    const size_t fragment_length = (left < avail) ? left : avail;
+		// Invariant: we never leave < kHeaderSize bytes in a block.
+		assert(kBlockSize - block_offset_ - kHeaderSize >= 0);
 
-    RecordType type;
-    const bool end = (left == fragment_length);
-    if (begin && end) {
-      type = kFullType;
-    } else if (begin) {
-      type = kFirstType;
-    } else if (end) {
-      type = kLastType;
-    } else {
-      type = kMiddleType;
-    }
+		// avail 为一个 block 可以写的实际数据长度
+		const size_t avail = kBlockSize - block_offset_ - kHeaderSize;
+		// 该 block 中能写该 slice 记录的大小
+		const size_t fragment_length = (left < avail) ? left : avail;
 
-    s = EmitPhysicalRecord(type, ptr, fragment_length);
-    ptr += fragment_length;
-    left -= fragment_length;
-    begin = false;
-  } while (s.ok() && left > 0);
-  return s;
+		RecordType type;
+		const bool end = (left == fragment_length);	// 当前 block 是否为 last block
+		if (begin && end)
+		{
+			type = kFullType;
+		}
+		else if (begin)
+		{
+			type = kFirstType;
+		}
+		else if (end)
+		{
+			type = kLastType;
+		}
+		else
+		{
+			type = kMiddleType;
+		}
+
+		s = EmitPhysicalRecord(type, ptr, fragment_length);
+		ptr += fragment_length;
+		left -= fragment_length;
+		begin = false;
+	} while (s.ok() && left > 0);
+
+	return s;
 }
 
-Status Writer::EmitPhysicalRecord(RecordType t, const char* ptr,
-                                  size_t length) {
-  assert(length <= 0xffff);  // Must fit in two bytes
-  assert(block_offset_ + kHeaderSize + length <= kBlockSize);
+Status
+Writer::EmitPhysicalRecord(RecordType t, const char* ptr, size_t length)
+{
+	assert(length <= 0xffff);  // Must fit in two bytes, i.e. 32K
+	assert(block_offset_ + kHeaderSize + length <= kBlockSize);
 
-  // Format the header
-  char buf[kHeaderSize];
-  buf[4] = static_cast<char>(length & 0xff);
-  buf[5] = static_cast<char>(length >> 8);
-  buf[6] = static_cast<char>(t);
+	// Format the header
+	char buf[kHeaderSize];
+	// length 为 2B
+	buf[4] = static_cast<char>(length & 0xff);
+	buf[5] = static_cast<char>(length >> 8);
+	// type 为 1B (FULL/FIRST/LAST/MIDDLE)
+	buf[6] = static_cast<char>(t);
 
-  // Compute the crc of the record type and the payload.
-  uint32_t crc = crc32c::Extend(type_crc_[t], ptr, length);
-  crc = crc32c::Mask(crc);  // Adjust for storage
-  EncodeFixed32(buf, crc);
+	// Compute the crc of the record type and the payload.
+	uint32_t crc = crc32c::Extend(type_crc_[t], ptr, length);
+	crc = crc32c::Mask(crc);  // Adjust for storage
+	EncodeFixed32(buf, crc);
 
-  // Write the header and the payload
-  Status s = dest_->Append(Slice(buf, kHeaderSize));
-  if (s.ok()) {
-    s = dest_->Append(Slice(ptr, length));
-    if (s.ok()) {
-      s = dest_->Flush();
-    }
-  }
-  block_offset_ += kHeaderSize + length;
-  return s;
+	// Write the header and the payload
+	Status s = dest_->Append(Slice(buf, kHeaderSize));
+	if (s.ok()) {
+		s = dest_->Append(Slice(ptr, length));
+		if (s.ok()) {
+			s = dest_->Flush();
+		}
+	}
+	block_offset_ += kHeaderSize + length;
+	return s;
 }
 
 }  // namespace log
