@@ -62,21 +62,25 @@ int InternalKeyComparator::Compare(const Slice& akey, const Slice& bkey) const {
     return r;
 }
 
-// TODO
+// 取出 Internal Key 中的 UserKey 字段, 根据 user 指定的 Comparator 和 limit 尝试替换 start
+// - 如果 start 被截短了，就用新的 start 并使用最大的sequence number
+// - 否则保持不变
 void InternalKeyComparator::FindShortestSeparator(std::string* start,
                                                   const Slice& limit) const {
     // 先尝试用 user_comparator_ 更新 userkey 部分
 	Slice user_start = ExtractUserKey(*start);
 	Slice user_limit = ExtractUserKey(limit);
-	std::string tmp(user_start.data(), user_start.size());
+	std::string tmp(user_start.data(), user_start.size());  // tmp 即待处理 userkey
 	user_comparator_->FindShortestSeparator(&tmp, user_limit);
 
-    // 如果 userkey 长度被截短, 但其在逻辑空间上变大了
+    // 如果 tmp userkey 在物理上长度被截短, 但其逻辑值变大了
 	if (tmp.size() < user_start.size()
 		&& user_comparator_->Compare(user_start, tmp) < 0)
 	{
 		// User key has become shorter physically, but larger logically.
 		// Tack on the earliest possible number to the shortened user key.
+        // 生成新的 *start: tmp + 0xFFFF FFFF FFFF FF00 + 0x1(kValueTypeForSeek)
+        // kMaxSequenceNumber 保证其排在相同 user key 记录序列的第一个
 		PutFixed64(&tmp, PackSequenceAndType(kMaxSequenceNumber, kValueTypeForSeek));
 		assert(this->Compare(*start, tmp) < 0);
 		assert(this->Compare(tmp, limit) < 0);
@@ -84,16 +88,21 @@ void InternalKeyComparator::FindShortestSeparator(std::string* start,
 	}
 }
 
-// TODO
+// 取出 Internal Key 中的 UserKey 字段，根据 user 指定的 comparator 尝试替换 key
+// - 如果 key 被替换了，就用新的 key 并使用最大的 sequence number
+// - 否则保持不变
 void InternalKeyComparator::FindShortSuccessor(std::string* key) const {
 	Slice user_key = ExtractUserKey(*key);
 	std::string tmp(user_key.data(), user_key.size());
+    // 先尝试用 user_comparator_ 更新 tmp
 	user_comparator_->FindShortSuccessor(&tmp);
 	if (tmp.size() < user_key.size()
 		&& user_comparator_->Compare(user_key, tmp) < 0)
 	{
 		// User key has become shorter physically, but larger logically.
 		// Tack on the earliest possible number to the shortened user key.
+        // tmp 在物理上被截短了，但其逻辑值变大了.
+        // 生成新的 *key: tmp + kMaxSequenceNumber + kValueTypeForSeek
 		PutFixed64(&tmp,
 				PackSequenceAndType(kMaxSequenceNumber, kValueTypeForSeek));
 		assert(this->Compare(*key, tmp) < 0);

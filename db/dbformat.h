@@ -201,7 +201,7 @@ public:
 	~LookupKey();
 
 	// Return a key suitable for lookup in a MemTable.
-	// memtable_key 是整个 LookupKey
+	// memtable_key 即将整个 LookupKey 转为 Slice
 	Slice memtable_key() const { return Slice(start_, end_ - start_); }
 
 	// Return an internal key (suitable for passing to an internal iterator)

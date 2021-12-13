@@ -73,65 +73,98 @@ class MemTableIterator : public Iterator {
 
 Iterator* MemTable::NewIterator() { return new MemTableIterator(&table_); }
 
-void MemTable::Add(SequenceNumber s, ValueType type, const Slice& key,
-                   const Slice& value) {
-  // Format of an entry is concatenation of:
-  //  key_size     : varint32 of internal_key.size()
-  //  key bytes    : char[internal_key.size()]
-  //  value_size   : varint32 of value.size()
-  //  value bytes  : char[value.size()]
-  size_t key_size = key.size();
-  size_t val_size = value.size();
-  size_t internal_key_size = key_size + 8;
-  const size_t encoded_len = VarintLength(internal_key_size) +
-                             internal_key_size + VarintLength(val_size) +
-                             val_size;
-  char* buf = arena_.Allocate(encoded_len);
-  char* p = EncodeVarint32(buf, internal_key_size);
-  std::memcpy(p, key.data(), key_size);
-  p += key_size;
-  EncodeFixed64(p, (s << 8) | type);
-  p += 8;
-  p = EncodeVarint32(p, val_size);
-  std::memcpy(p, value.data(), val_size);
-  assert(p + val_size == buf + encoded_len);
-  table_.Insert(buf);
+// 一个 Memtable 中的 Entry 的构成:
+// ```
+// +--------------+-------------------------------+
+// |  key_size    | varint32, internal_key.size() |
+// +--------------+-------------------------------+
+// |  key_bytes   | char[internal_key.size()]     |
+// |   - userkey  |   - (key_size - 8)            |
+// |   - tag      |   - 8B (7B Sequence + 1B Type)|
+// +--------------+-------------------------------+
+// |  value_size  | varint32, value.size()        |
+// +--------------+-------------------------------+
+// |  value_bytes | char[value.size()]            |
+// +--------------+-------------------------------+
+// ```
+
+void
+MemTable::Add(SequenceNumber s, ValueType type,
+              const Slice& key, const Slice& value)
+{
+    size_t key_size = key.size();
+    size_t val_size = value.size();
+    size_t internal_key_size = key_size + 8;
+    const size_t encoded_len = VarintLength(internal_key_size) + internal_key_size +
+                               VarintLength(val_size) + val_size;
+    char* buf = arena_.Allocate(encoded_len);
+
+    // Encode Key Part
+    char* p = EncodeVarint32(buf, internal_key_size);
+    std::memcpy(p, key.data(), key_size);
+    p += key_size;
+    EncodeFixed64(p, (s << 8) | type);
+    p += 8;
+
+    // Encode Value Part
+    p = EncodeVarint32(p, val_size);
+    std::memcpy(p, value.data(), val_size);
+    assert(p + val_size == buf + encoded_len);
+
+    table_.Insert(buf);
 }
 
-bool MemTable::Get(const LookupKey& key, std::string* value, Status* s) {
-  Slice memkey = key.memtable_key();
-  Table::Iterator iter(&table_);
-  iter.Seek(memkey.data());
-  if (iter.Valid()) {
-    // entry format is:
-    //    klength  varint32
-    //    userkey  char[klength]
-    //    tag      uint64
-    //    vlength  varint32
-    //    value    char[vlength]
-    // Check that it belongs to same user key.  We do not check the
-    // sequence number since the Seek() call above should have skipped
-    // all entries with overly large sequence numbers.
-    const char* entry = iter.key();
-    uint32_t key_length;
-    const char* key_ptr = GetVarint32Ptr(entry, entry + 5, &key_length);
-    if (comparator_.comparator.user_comparator()->Compare(
-            Slice(key_ptr, key_length - 8), key.user_key()) == 0) {
-      // Correct user key
-      const uint64_t tag = DecodeFixed64(key_ptr + key_length - 8);
-      switch (static_cast<ValueType>(tag & 0xff)) {
-        case kTypeValue: {
-          Slice v = GetLengthPrefixedSlice(key_ptr + key_length);
-          value->assign(v.data(), v.size());
-          return true;
+/**
+ * 
+ * @param key[IN]
+ * @param value[OUT]
+ * @param s[OUT]
+ */
+bool
+MemTable::Get(const LookupKey& key, std::string* value, Status* s)
+{
+    Slice memkey = key.memtable_key();
+    Table::Iterator iter(&table_);
+    iter.Seek(memkey.data());
+    // Seek 到 >= memkey 的第一个记录
+    if (iter.Valid())
+    {
+        // entry format is:
+        //    klength  varint32
+        //    userkey  char[klength]
+        //    tag      uint64
+        //    vlength  varint32
+        //    value    char[vlength]
+        // Check that it belongs to same user key.  We do not check the
+        // sequence number since the Seek() call above should have skipped
+        // all entries with overly large sequence numbers.
+        // 检查是否是同一个 Userkey.
+        // 这里不需要检查 Sequence Number, Seek() 会跳过所有 SequenceNum 过大的 entries
+        // ??? 不是小于?
+        const char* entry = iter.key();
+        uint32_t key_length;
+        const char* key_ptr = GetVarint32Ptr(entry, entry + 5, &key_length);
+        // 检查 input key 中的 userkey 是否与 skiplist 的 user_key 相同
+        if (comparator_.comparator.user_comparator()
+                ->Compare(Slice(key_ptr, key_length - 8), key.user_key()) == 0)
+        {
+            // Correct user key
+            const uint64_t tag = DecodeFixed64(key_ptr + key_length - 8);
+            switch (static_cast<ValueType>(tag & 0xff)) {
+                // ValueType 为 kTypeValue 则解析 Value 部分
+                case kTypeValue: {
+                    Slice v = GetLengthPrefixedSlice(key_ptr + key_length);
+                    value->assign(v.data(), v.size());
+                    return true;
+                }
+                // ValueType 为 Tombstone
+                case kTypeDeletion:
+                    *s = Status::NotFound(Slice());
+                    return true;
+            }
         }
-        case kTypeDeletion:
-          *s = Status::NotFound(Slice());
-          return true;
-      }
     }
-  }
-  return false;
+    return false;
 }
 
 }  // namespace leveldb
