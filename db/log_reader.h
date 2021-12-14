@@ -102,7 +102,7 @@ private:
 	uint64_t last_record_offset_;
 
 	// Offset of the first location past the end of buffer_.
-    // last uncared block 之后的 first location 的 offset
+    // last un-cared block 之后的 first location 的 offset
 	uint64_t end_of_buffer_offset_;
 
 	// Offset at which to start looking for the first record to return

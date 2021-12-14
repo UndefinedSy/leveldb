@@ -89,6 +89,8 @@ Reader::ReadRecord(Slice* record, std::string* scratch)
         // ReadPhysicalRecord may have only had an empty trailer remaining in its
         // internal buffer. Calculate the offset of the next physical record now
         // that it has returned, properly accounting for its header size.
+        // ReadPhysicalRecord 的 internal buffer 中可能只有一个 empty trailer
+        // 计算下一个 physical record 的 offset，正确考虑其标头大小。
         uint64_t physical_record_offset =
             end_of_buffer_offset_ - buffer_.size() - kHeaderSize - fragment.size();
 
@@ -215,17 +217,24 @@ void Reader::ReportDrop(uint64_t bytes, const Status& reason) {
   }
 }
 
+// 当 buffer 中的数据不足时会一次尝试读取一个 block 到 buffer
+// 并尝试逐个 log record 的去消费，并通过 result 传出一个 log record
+// 如果成功拿到一个 log record 则返回这个 log record 的 type(FULL/FIRST/MIDDLE/LAST)
+// 如果失败则返回错误
 unsigned int
 Reader::ReadPhysicalRecord(Slice* result)
 {
     while (true)
     {
+        // 如果 buffer 中剩余的数据不足一个 Header
         if (buffer_.size() < kHeaderSize)
         {
+            // 还没到当前 log file 的 EOF, 丢掉剩下的 trailer，再读一个 block
             if (!eof_)
             {
                 // Last read was a full read, so this is a trailer to skip
                 buffer_.clear();
+                // 尝试读一个 block
                 Status status = file_->Read(kBlockSize, &buffer_, backing_store_);
                 end_of_buffer_offset_ += buffer_.size();
                 if (!status.ok())
@@ -235,6 +244,7 @@ Reader::ReadPhysicalRecord(Slice* result)
                     eof_ = true;
                     return kEof;
                 }
+                // 如果得到的 size 小于一个 Block size，则意味着本次 Read 遇到了 EOF
                 else if (buffer_.size() < kBlockSize)
                 {
                     eof_ = true;
@@ -243,14 +253,20 @@ Reader::ReadPhysicalRecord(Slice* result)
             }
             else
             {
-                // Note that if buffer_ is non-empty, we have a truncated header at the
-                // end of the file, which can be caused by the writer crashing in the
-                // middle of writing the header. Instead of considering this an error,
-                // just report EOF.
+                // 当出现 EOF 的时候，需要注意的是如果 buffer_ 是非空的
+                // 这意味着我们在一个文件的 EOF 处有一个 truncated header
+                // 这可能是由于 writer 在写入 header 的过程中 crash 导致的
+                // 这里不将这种情况作为一个 Error，仅仅 report 一个 EOF
                 buffer_.clear();
                 return kEof;
             }
         }
+
+        // record :=
+        //     checksum: uint32     // crc32c of type and data[] ; little-endian
+        //     length: uint16       // little-endian
+        //     type: uint8          // One of FULL, FIRST, MIDDLE, LAST
+        //     data: uint8[length]
 
         // Parse the header
         const char* header = buffer_.data();
@@ -258,18 +274,23 @@ Reader::ReadPhysicalRecord(Slice* result)
         const uint32_t b = static_cast<uint32_t>(header[5]) & 0xff;
         const unsigned int type = header[6];
         const uint32_t length = a | (b << 8);
+
+        // header + log_entry's length 超过的当前 buffer 剩余数据
         if (kHeaderSize + length > buffer_.size())
         {
             size_t drop_size = buffer_.size();
             buffer_.clear();
+
+            // 如果当前不是 EOF，意味着(TODO ...)
             if (!eof_)
             {
                 ReportCorruption(drop_size, "bad record length");
                 return kBadRecord;
             }
-            // If the end of the file has been reached without reading |length| bytes
-            // of payload, assume the writer died in the middle of writing the record.
-            // Don't report a corruption.
+
+            // 如果在还没有读完 |length| bytes 的 Payload 时就遇到了 EOF
+            // 则可能是 writer 在写一个 record 的过程中挂掉
+            // 这里不会 report corruption
             return kEof;
         }
 
@@ -289,10 +310,10 @@ Reader::ReadPhysicalRecord(Slice* result)
             uint32_t actual_crc = crc32c::Value(header + 6, 1 + length);
             if (actual_crc != expected_crc)
             {
-                // Drop the rest of the buffer since "length" itself may have
-                // been corrupted and if we trust it, we could find some
-                // fragment of a real log record that just happens to look
-                // like a valid log record.
+                // 当 checksum 校验失败时，直接丢掉这个 buffer 的其余部分
+                // 因为 length 字段本身可能已经损坏
+                // 如果我们选择相信这个 length, 则可能会读到一些 log record 的片段
+                // 而这些片段可能恰好看起来像一个有效的 log record, 但实际可能是错位的
                 size_t drop_size = buffer_.size();
                 buffer_.clear();
                 ReportCorruption(drop_size, "checksum mismatch");
@@ -300,10 +321,12 @@ Reader::ReadPhysicalRecord(Slice* result)
             }
         }
 
+        // 消费掉 buffer 中的一个 log entry
         buffer_.remove_prefix(kHeaderSize + length);
 
-        // Skip physical record that started before initial_offset_
-        if (end_of_buffer_offset_ - buffer_.size() - kHeaderSize - length < initial_offset_)
+        // 如果这个 log record 的开始位置在 initial_offset_ 之前，则 skip 掉
+        if (end_of_buffer_offset_ - buffer_.size() - kHeaderSize - length
+                < initial_offset_)
         {
             result->clear();
             return kBadRecord;

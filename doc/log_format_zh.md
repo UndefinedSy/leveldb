@@ -26,8 +26,8 @@ record :=
 - FULL record 包含整个 user record 的内容。
 - FIRST, MIDDLE, LAST 则是用于 user records 被拆分成多个片段的情况（通常是因为 block 的边界造成）。
   - FIRST 是 user record 的第一个片段
-  - LAST 是 user record 的最后一个片段
-  - MIDDLE 是 user record 的中间片段
+- LAST 是 user record 的最后一个片段
+- MIDDLE 是 user record 的中间片段
 
 > 例如一个 user records 的序列:
 > ```
