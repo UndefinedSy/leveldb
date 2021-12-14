@@ -68,17 +68,17 @@ private:
 	// Extend record types with the following special values
 	enum {
 		kEof = kMaxRecordType + 1,
-		// Returned whenever we find an invalid physical record.
-		// Currently there are three situations in which this happens:
-		// * The record has an invalid CRC (ReadPhysicalRecord reports a drop)
-		// * The record is a 0-length record (No drop is reported)
-		// * The record is below constructor's initial_offset (No drop is reported)
+
+        // 目前有 3 种场景会出现 kBadRecord
+        // * 该 record 的 CRC invalid (ReadPhysicalRecord 上报一个 drop)
+        // * 该 record 是一个 0-length record (不会上报 drop)
+        // * 该 record 的物理位置是在构造函数中 initial_offset 之前 (不会上报 drop)
 		kBadRecord = kMaxRecordType + 2
 	};
 
-	// Skips all blocks that are completely before "initial_offset_".
-	//
-	// Returns true on success. Handles reporting.
+    // Skip 所有 completely before "initial_offset_" 的 blocks
+    // 注意这里 skip 的粒度是 block, 即只跳过那些完全在 initial offset 之前的 block
+    // Returns true on success. Handles reporting.
 	bool SkipToInitialBlock();
 
 	// Return type, or one of the preceding special values
@@ -89,16 +89,20 @@ private:
 	void ReportCorruption(uint64_t bytes, const char* reason);
 	void ReportDrop(uint64_t bytes, const Status& reason);
 
+    // 两个主要的 sub-components
 	SequentialFile* const file_;
 	Reporter* const reporter_;
+
 	bool const checksum_;
 	char* const backing_store_;
-	Slice buffer_;
-	bool eof_;  // Last Read() indicated EOF by returning < kBlockSize
+	Slice buffer_;  // 读取的内容
+	bool eof_;  // Last Read() 返回的字节数 < kBlockSize, 表示 EOF
 
-	// Offset of the last record returned by ReadRecord.
+    // ReadRecord 返回的 last record 的 offset
 	uint64_t last_record_offset_;
+
 	// Offset of the first location past the end of buffer_.
+    // last uncared block 之后的 first location 的 offset
 	uint64_t end_of_buffer_offset_;
 
 	// Offset at which to start looking for the first record to return

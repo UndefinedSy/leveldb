@@ -218,34 +218,31 @@ class LEVELDB_EXPORT Env {
   virtual void SleepForMicroseconds(int micros) = 0;
 };
 
-// A file abstraction for reading sequentially through a file
+// 一个对于 file 进行顺序读的抽象
 class LEVELDB_EXPORT SequentialFile {
- public:
-  SequentialFile() = default;
+public:
+    SequentialFile() = default;
 
-  SequentialFile(const SequentialFile&) = delete;
-  SequentialFile& operator=(const SequentialFile&) = delete;
+    SequentialFile(const SequentialFile&) = delete;
+    SequentialFile& operator=(const SequentialFile&) = delete;
 
-  virtual ~SequentialFile();
+    virtual ~SequentialFile();
 
-  // Read up to "n" bytes from the file.  "scratch[0..n-1]" may be
-  // written by this routine.  Sets "*result" to the data that was
-  // read (including if fewer than "n" bytes were successfully read).
-  // May set "*result" to point at data in "scratch[0..n-1]", so
-  // "scratch[0..n-1]" must be live when "*result" is used.
-  // If an error was encountered, returns a non-OK status.
-  //
-  // REQUIRES: External synchronization
-  virtual Status Read(size_t n, Slice* result, char* scratch) = 0;
+    // 从该 file 中最多读取 n bytes, 该 func 可能会写 scratch[0..n-1]
+    // *result 会指向读出来的数据 (一次 successfully read 的字节数少于 n)
+    // 
+    // 实现中可以会将 *result 指向 scratch[0...n-1] 中的数据 (Slice 本身不负责内存管理)
+    // 所以在 *result 被使用时，scratch[0...n-1] 必须保持 live
+    // 如果出错会返回一个 non-OK status
+    // 
+    // REQUIRES: External synchronization
+    virtual Status Read(size_t n, Slice* result, char* scratch) = 0;
 
-  // Skip "n" bytes from the file. This is guaranteed to be no
-  // slower that reading the same data, but may be faster.
-  //
-  // If end of file is reached, skipping will stop at the end of the
-  // file, and Skip will return OK.
-  //
-  // REQUIRES: External synchronization
-  virtual Status Skip(uint64_t n) = 0;
+    // 该方法用于跳过该文件的 n 个 bytes, 其实现保证不会比读 n bytes 慢
+    // 如果 Skip 中到了该文件的 end, skipping 停止于 EOF, 并返回 OK
+    // 
+    // REQUIRES: External synchronization
+    virtual Status Skip(uint64_t n) = 0;
 };
 
 // A file abstraction for randomly reading the contents of a file.
