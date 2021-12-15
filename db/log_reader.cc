@@ -91,9 +91,12 @@ Reader::ReadRecord(Slice* record, std::string* scratch)
         // that it has returned, properly accounting for its header size.
         // ReadPhysicalRecord 的 internal buffer 中可能只有一个 empty trailer
         // 计算下一个 physical record 的 offset，正确考虑其标头大小。
+        // 看起来是当前读出来的 entry 的 start offset
         uint64_t physical_record_offset =
             end_of_buffer_offset_ - buffer_.size() - kHeaderSize - fragment.size();
 
+        // 当设置了 initial_offset_ 时, 如果从 initial_offset_ 开始读的 record
+        // 是一个大的 log entry 的 MIDDLE / LAST, 则直接丢掉
         if (resyncing_)
         {
             if (record_type == kMiddleType)
@@ -116,10 +119,9 @@ Reader::ReadRecord(Slice* record, std::string* scratch)
             case kFullType:
                 if (in_fragmented_record)
                 {
-                    // Handle bug in earlier versions of log::Writer where
-                    // it could emit an empty kFirstType record at the tail end
-                    // of a block followed by a kFullType or kFirstType record
-                    // at the beginning of the next block.
+                    // 负责 Handle log::Writer 早期版本中的 bug
+                    // 该 bug 中 write 可能在一个 block 的 tail 发起一条 empty kFirstType record
+                    // 然后在下一个 block 的开头发起一条 kFullType 或 kFirstType record
                     if (!scratch->empty()) {
                         ReportCorruption(scratch->size(), "partial record without end(1)");
                     }
@@ -133,10 +135,9 @@ Reader::ReadRecord(Slice* record, std::string* scratch)
             case kFirstType:
                 if (in_fragmented_record)
                 {
-                    // Handle bug in earlier versions of log::Writer where
-                    // it could emit an empty kFirstType record at the tail end
-                    // of a block followed by a kFullType or kFirstType record
-                    // at the beginning of the next block.
+                    // 负责 Handle log::Writer 早期版本中的 bug
+                    // 该 bug 中 write 可能在一个 block 的 tail 发起一条 empty kFirstType record
+                    // 然后在下一个 block 的开头发起一条 kFullType 或 kFirstType record
                     if (!scratch->empty()) {
                         ReportCorruption(scratch->size(), "partial record without end(2)");
                     }
@@ -179,8 +180,9 @@ Reader::ReadRecord(Slice* record, std::string* scratch)
                     // treat it as a corruption, just ignore the entire logical record.
                     scratch->clear();
                 }
-                return false;
+                return false;   // EOF 会返回
 
+            // BadRecord 和 unknown type 都只是报错但是不会返回, 而是继续尝试读找下一个 record
             case kBadRecord:
                 if (in_fragmented_record) {
                     ReportCorruption(scratch->size(), "error in middle of record");

@@ -52,6 +52,7 @@ public:
 	// reader or the next mutation to *scratch.
 	/**
 	 * Read the next record into *record.
+     * 注意这里读的是一整个 log entry, 即可能是一个 FIRST + MIDDLE* + LAST 多个 record 组成的 entry
 	 * @param scratch, 可以使用 scratch 作为临时存储
 	 * @param record, The contents filled in *record will only be valid until the next mutating operation on this reader or the next mutation to *scratch.
 					  填写在 *record 中的内容仅在对该 reader 的下一次变异操作或对 *scratch 的下一次变异之前有效。
@@ -98,11 +99,11 @@ private:
 	Slice buffer_;  // 读取的内容
 	bool eof_;  // Last Read() 返回的字节数 < kBlockSize, 表示 EOF
 
-    // ReadRecord 返回的 last record 的 offset
+    // ReadRecord() 返回的 record 的 start offset
 	uint64_t last_record_offset_;
 
 	// Offset of the first location past the end of buffer_.
-    // last un-cared block 之后的 first location 的 offset
+    // 当前 buffer_ 之后的位置, 即下一次要读的 offset
 	uint64_t end_of_buffer_offset_;
 
 	// Offset at which to start looking for the first record to return
@@ -111,6 +112,8 @@ private:
 	// True if we are resynchronizing after a seek (initial_offset_ > 0). In
 	// particular, a run of kMiddleType and kLastType records can be silently
 	// skipped in this mode
+    // 如果我们在 seek(即 initial_offset_ > 0) 后 resynchronizing，则为 True
+    // 在这种模式下，kMiddleType 和 kLastType 可以 silently skipped
 	bool resyncing_;
 };
 
