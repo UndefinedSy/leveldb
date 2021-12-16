@@ -15,28 +15,30 @@ namespace leveldb {
 struct BlockContents;
 class Comparator;
 
+// Block 相当于是 Block Reader, 用于 Decodes block builder 所生成的 blocks
 class Block {
- public:
-  // Initialize the block with the specified contents.
-  explicit Block(const BlockContents& contents);
+public:
+    // Initialize the block with the specified contents.
+    explicit Block(const BlockContents& contents);
 
-  Block(const Block&) = delete;
-  Block& operator=(const Block&) = delete;
+    Block(const Block&) = delete;
+    Block& operator=(const Block&) = delete;
 
-  ~Block();
+    ~Block();
 
-  size_t size() const { return size_; }
-  Iterator* NewIterator(const Comparator* comparator);
+    size_t size() const { return size_; }
+    Iterator* NewIterator(const Comparator* comparator);
 
- private:
-  class Iter;
+private:
+    class Iter;
 
-  uint32_t NumRestarts() const;
+    // 解析该 Block 的最后一个 uint32, 即 num_restarts
+    uint32_t NumRestarts() const;
 
-  const char* data_;
-  size_t size_;
-  uint32_t restart_offset_;  // Offset in data_ of restart array
-  bool owned_;               // Block owns data_[]
+    const char* data_;
+    size_t size_;              // 该 Block 的大小
+    uint32_t restart_offset_;  // Offset in data_ of restart array
+    bool owned_;               // Block owns data_[], 即 Block 应负责 delete[]
 };
 
 }  // namespace leveldb

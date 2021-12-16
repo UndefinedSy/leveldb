@@ -14,6 +14,7 @@ namespace leveldb {
 
 struct Options;
 
+// BlockBuilder 相当于是 Block Writer
 class BlockBuilder {
 public:
 	explicit BlockBuilder(const Options* options);
@@ -28,8 +29,9 @@ public:
 	// REQUIRES: 传入参数 key 要比任何已经加入的 key 大
 	void Add(const Slice& key, const Slice& value);
 	
-	// 表示完成了构建该 block, 返回一个指向 block contents 的 slice
-	// 返回的 slice 在这个 builder 的生命周期内 或 在调用 Reset() 之前保持 valid
+	// 用于完成该 block 的构建, 即将 block trailer 给 append 到 kv pairs 之后
+    // 返回一个指向 block contents 的 slice
+	// 该 slice 在这个 builder 的生命周期内 或 在调用 Reset() 之前保持 valid
 	Slice Finish();
 
 	// Returns an estimate of the current (uncompressed) size of the block
