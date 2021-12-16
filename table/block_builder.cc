@@ -2,29 +2,36 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 //
-// BlockBuilder generates blocks where keys are prefix-compressed:
-//
-// When we store a key, we drop the prefix shared with the previous
-// string.  This helps reduce the space requirement significantly.
-// Furthermore, once every K keys, we do not apply the prefix
-// compression and store the entire key.  We call this a "restart
-// point".  The tail end of the block stores the offsets of all of the
-// restart points, and can be used to do a binary search when looking
-// for a particular key.  Values are stored as-is (without compression)
-// immediately following the corresponding key.
-//
-// An entry for a particular key-value pair has the form:
-//     shared_bytes: varint32
-//     unshared_bytes: varint32
-//     value_length: varint32
-//     key_delta: char[unshared_bytes]
-//     value: char[value_length]
-// shared_bytes == 0 for restart points.
-//
-// The trailer of the block has the form:
-//     restarts: uint32[num_restarts]
-//     num_restarts: uint32
-// restarts[i] contains the offset within the block of the ith restart point.
+// BlockBuilder 用于生成 blocks，其中 key 是进行前缀压缩的
+// 
+// 当存储一个 key 时，会丢弃其与前一个 string 共享的前缀，以减少空间消耗
+// 此外，每隔 K 个 keys，会进行一次不采取前缀压缩的方式，存储整个键，称为 "restart point"
+// 一个 block 的尾部会存储 restart points 的 offset，在寻找某个 key 时也可用来做二分搜索
+// Value 是以无压缩的形式存储在相应的 Key 之后的
+// 
+// 对于一个 KV Pair 的 entry 有着如下的构成:
+// ```
+// +----------------+----------------------+
+// | shared_bytes   | varint32             |  // shared_byte == 0 表示 restart point
+// +----------------+----------------------+
+// | unshared_bytes | varint32             |
+// +----------------+----------------------+
+// | value_length   | varint32             |
+// +----------------+----------------------+
+// | key_delta      | char[unshared_bytes] |
+// +----------------+----------------------+
+// | value          | char[value_length]   |
+// +----------------+----------------------+
+// ```
+// 
+// 一个 Block 的 trailer 有着如下的构成:
+// ```
+// +--------------+----------------------+
+// | restarts     | uint32[num_restarts] |
+// +--------------+----------------------+
+// | num_restarts | uint32               |
+// +--------------+----------------------+
+// 其中 restarts[i] 中记录的是该 block 中第 i 个 restart point 的 offset
 
 #include "table/block_builder.h"
 
@@ -38,18 +45,19 @@
 namespace leveldb {
 
 BlockBuilder::BlockBuilder(const Options* options)
-    : options_(options), restarts_(), counter_(0), finished_(false) {
-  assert(options->block_restart_interval >= 1);
-  restarts_.push_back(0);  // First restart point is at offset 0
+    : options_(options), restarts_(), counter_(0), finished_(false)
+{
+	assert(options->block_restart_interval >= 1);
+	restarts_.push_back(0);  // First restart point is at offset 0
 }
 
 void BlockBuilder::Reset() {
-  buffer_.clear();
-  restarts_.clear();
-  restarts_.push_back(0);  // First restart point is at offset 0
-  counter_ = 0;
-  finished_ = false;
-  last_key_.clear();
+	buffer_.clear();
+	restarts_.clear();
+	restarts_.push_back(0);  // First restart point is at offset 0
+	counter_ = 0;
+	finished_ = false;
+	last_key_.clear();
 }
 
 size_t BlockBuilder::CurrentSizeEstimate() const {
