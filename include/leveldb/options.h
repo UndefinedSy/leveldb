@@ -128,7 +128,8 @@ struct LEVELDB_EXPORT Options {
   // worth switching to kNoCompression.  Even if the input data is
   // incompressible, the kSnappyCompression implementation will
   // efficiently detect that and will switch to uncompressed mode.
-  CompressionType compression = kSnappyCompression;
+    // 可插拔 block compression 模块
+    CompressionType compression = kSnappyCompression;
 
   // EXPERIMENTAL: If true, append to existing MANIFEST and log files
   // when a database is opened.  This can significantly speed up open.
@@ -139,7 +140,8 @@ struct LEVELDB_EXPORT Options {
   // If non-null, use the specified filter policy to reduce disk reads.
   // Many applications will benefit from passing the result of
   // NewBloomFilterPolicy() here.
-  const FilterPolicy* filter_policy = nullptr;
+    // 可插拔 key filter 模块
+    const FilterPolicy* filter_policy = nullptr;
 };
 
 // Options that control read operations
