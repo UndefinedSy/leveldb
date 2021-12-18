@@ -18,29 +18,28 @@ class Block;
 class RandomAccessFile;
 struct ReadOptions;
 
-// BlockHandle is a pointer to the extent of a file that stores a data
-// block or a meta block.
+// BlockHandle 可以理解为一个编解码器, 它是一个指向 data block / meta block 中数据的指针
 class BlockHandle {
- public:
-  // Maximum encoding length of a BlockHandle
-  enum { kMaxEncodedLength = 10 + 10 };
+public:
+    // Maximum encoding length of a BlockHandle
+    enum { kMaxEncodedLength = 10 + 10 };
 
-  BlockHandle();
+    BlockHandle();
 
-  // The offset of the block in the file.
-  uint64_t offset() const { return offset_; }
-  void set_offset(uint64_t offset) { offset_ = offset; }
+    // The offset of the block in the file.
+    uint64_t offset() const { return offset_; }
+    void set_offset(uint64_t offset) { offset_ = offset; }
 
-  // The size of the stored block
-  uint64_t size() const { return size_; }
-  void set_size(uint64_t size) { size_ = size; }
+    // The size of the stored block
+    uint64_t size() const { return size_; }
+    void set_size(uint64_t size) { size_ = size; }
 
-  void EncodeTo(std::string* dst) const;
-  Status DecodeFrom(Slice* input);
+    void EncodeTo(std::string* dst) const;
+    Status DecodeFrom(Slice* input);
 
- private:
-  uint64_t offset_;
-  uint64_t size_;
+private:
+    uint64_t offset_;
+    uint64_t size_;
 };
 
 // Footer encapsulates the fixed information stored at the tail
