@@ -10,7 +10,7 @@
 // non-const method, all threads accessing the same TableBuilder must use
 // external synchronization.
 
-// TableBuilder 提供了构建 Table 的接口
+// TableBuilder 提供了构建 Table 的接口, 即 Table 的 Writer
 // (Table 是一个 immutable 的, 有序的 key-values)
 // 
 // 多线程可以在不需要 external synchronization 的情况下对一个 TableBuilder 调用 const methods
