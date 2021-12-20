@@ -72,6 +72,7 @@ Table::Open(const Options& options, RandomAccessFile* file, uint64_t size,
         rep->file = file;
         rep->metaindex_handle = footer.metaindex_handle();
         rep->index_block = index_block;
+		// 如果 option 中设置了 block cache, 则还需要为该 table 创建 cache
         rep->cache_id = (options.block_cache ? options.block_cache->NewId() : 0);
         rep->filter_data = nullptr;
         rep->filter = nullptr;

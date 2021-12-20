@@ -42,31 +42,32 @@ private:
     uint64_t size_;
 };
 
-// Footer encapsulates the fixed information stored at the tail
-// end of every table file.
-class Footer {
- public:
-  // Encoded length of a Footer.  Note that the serialization of a
-  // Footer will always occupy exactly this many bytes.  It consists
-  // of two block handles and a magic number.
-  enum { kEncodedLength = 2 * BlockHandle::kMaxEncodedLength + 8 };
+// Footer 封装了存放在每个 table 尾部的固定的信息, 即
+// metaindex block 和 index block 的 BlockHandle, 以及一个 magic number。
+class Footer
+{
+public:
+    // Encoded length of a Footer.
+    // of two block handles and a magic number.
+    // Footer 的序列化将总是占用这么多字节, 它由两个 block handles 和一个 magic number 组成。
+    enum { kEncodedLength = 2 * BlockHandle::kMaxEncodedLength + 8 };
 
-  Footer() = default;
+    Footer() = default;
 
-  // The block handle for the metaindex block of the table
-  const BlockHandle& metaindex_handle() const { return metaindex_handle_; }
-  void set_metaindex_handle(const BlockHandle& h) { metaindex_handle_ = h; }
+    // The block handle for the metaindex block of the table
+    const BlockHandle& metaindex_handle() const { return metaindex_handle_; }
+    void set_metaindex_handle(const BlockHandle& h) { metaindex_handle_ = h; }
 
-  // The block handle for the index block of the table
-  const BlockHandle& index_handle() const { return index_handle_; }
-  void set_index_handle(const BlockHandle& h) { index_handle_ = h; }
+    // The block handle for the index block of the table
+    const BlockHandle& index_handle() const { return index_handle_; }
+    void set_index_handle(const BlockHandle& h) { index_handle_ = h; }
 
-  void EncodeTo(std::string* dst) const;
-  Status DecodeFrom(Slice* input);
+    void EncodeTo(std::string* dst) const;
+    Status DecodeFrom(Slice* input);
 
- private:
-  BlockHandle metaindex_handle_;
-  BlockHandle index_handle_;
+private:
+    BlockHandle metaindex_handle_;
+    BlockHandle index_handle_;
 };
 
 // kTableMagicNumber was picked by running
