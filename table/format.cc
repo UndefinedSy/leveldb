@@ -65,83 +65,114 @@ Status Footer::DecodeFrom(Slice* input)
 	return result;
 }
 
+/**
+ * Read the block identified by "handle" from "file".
+ * 如果 block contents 做过压缩也会对 block contents 做解压
+ * @param file[IN] 数据源 file
+ * @param options[IN]
+ * @param hanlde[IN] 标识要读取的 block 的 offset 和 size
+ * @param result[OUT] 成功时会将 content 通过 result 传出
+ *                    对于需要 reader 自行管理的情况会 set cachable 和 heap_allocated
+ * @return non-OK iff failed
+ *         OK 并将结果填入 result iff sucess
+ */
 Status
 ReadBlock(RandomAccessFile* file, const ReadOptions& options, const BlockHandle& handle,
 		  BlockContents* result)
 {
-  result->data = Slice();
-  result->cachable = false;
-  result->heap_allocated = false;
+    result->data = Slice();
+    result->cachable = false;
+    result->heap_allocated = false;
 
-  // Read the block contents as well as the type/crc footer.
-  // See table_builder.cc for the code that built this structure.
-  size_t n = static_cast<size_t>(handle.size());
-  char* buf = new char[n + kBlockTrailerSize];
-  Slice contents;
-  Status s = file->Read(handle.offset(), n + kBlockTrailerSize, &contents, buf);
-  if (!s.ok()) {
-    delete[] buf;
-    return s;
-  }
-  if (contents.size() != n + kBlockTrailerSize) {
-    delete[] buf;
-    return Status::Corruption("truncated block read");
-  }
-
-  // Check the crc of the type and the block contents
-  const char* data = contents.data();  // Pointer to where Read put the data
-  if (options.verify_checksums) {
-    const uint32_t crc = crc32c::Unmask(DecodeFixed32(data + n + 1));
-    const uint32_t actual = crc32c::Value(data, n + 1);
-    if (actual != crc) {
-      delete[] buf;
-      s = Status::Corruption("block checksum mismatch");
-      return s;
+    // Read the block contents 以及 per-block footer <type> <crc>
+    // "table_builder.cc" 是该 stucture 的构造方, 或者说是 Writer
+    // +------------+----------+
+    // | block_data | uint8[n] |
+    // +------------+----------+
+    // | type       | uint8    |
+    // +------------+----------+
+    // | crc        | uint32   |
+    // +------------+----------+
+    size_t n = static_cast<size_t>(handle.size());  // block_data 部分
+    char* buf = new char[n + kBlockTrailerSize];
+    Slice contents;
+    Status s = file->Read(handle.offset(), n + kBlockTrailerSize, &contents, buf);
+    if (!s.ok()) {
+        delete[] buf;
+        return s;
     }
-  }
-
-  switch (data[n]) {
-    case kNoCompression:
-      if (data != buf) {
-        // File implementation gave us pointer to some other data.
-        // Use it directly under the assumption that it will be live
-        // while the file is open.
+    if (contents.size() != n + kBlockTrailerSize) {
         delete[] buf;
-        result->data = Slice(data, n);
-        result->heap_allocated = false;
-        result->cachable = false;  // Do not double-cache
-      } else {
-        result->data = Slice(buf, n);
-        result->heap_allocated = true;
-        result->cachable = true;
-      }
-
-      // Ok
-      break;
-    case kSnappyCompression: {
-      size_t ulength = 0;
-      if (!port::Snappy_GetUncompressedLength(data, n, &ulength)) {
-        delete[] buf;
-        return Status::Corruption("corrupted compressed block contents");
-      }
-      char* ubuf = new char[ulength];
-      if (!port::Snappy_Uncompress(data, n, ubuf)) {
-        delete[] buf;
-        delete[] ubuf;
-        return Status::Corruption("corrupted compressed block contents");
-      }
-      delete[] buf;
-      result->data = Slice(ubuf, ulength);
-      result->heap_allocated = true;
-      result->cachable = true;
-      break;
+        return Status::Corruption("truncated block read");
     }
-    default:
-      delete[] buf;
-      return Status::Corruption("bad block type");
-  }
 
-  return Status::OK();
+    // Check the crc of the type and the block contents
+    const char* data = contents.data();  // Pointer to where Read put the data
+    if (options.verify_checksums)
+    {
+        const uint32_t crc = crc32c::Unmask(DecodeFixed32(data + n + 1));
+        const uint32_t actual = crc32c::Value(data, n + 1);
+        if (actual != crc)
+        {
+            delete[] buf;
+            s = Status::Corruption("block checksum mismatch");
+            return s;
+        }
+    }
+
+    switch (data[n]) // type
+    {
+        case kNoCompression:
+            if (data != buf)
+            {
+                // 上述 `file` 的 implementation 所返回的指针指向了一些其他的 data
+                // 即 file 的实现会管理这块数据
+                // 这里就直接使用 `file` 返回的指针，假设它在 file open 期间始终是 live 的
+                delete[] buf;
+                result->data = Slice(data, n);
+                result->heap_allocated = false;
+                result->cachable = false;  // Do not double-cache
+            }
+            else
+            {
+                // file 仅仅是读了数据, 数据本身需要 reader 自己去管理
+                result->data = Slice(buf, n);
+                result->heap_allocated = true;  // reader need to call delete
+                result->cachable = true;    // set cache
+            }
+
+            // Ok
+            break;
+        case kSnappyCompression:
+            {
+                // get uncompressed length
+                size_t ulength = 0;
+                if (!port::Snappy_GetUncompressedLength(data, n, &ulength)) {
+                    delete[] buf;
+                    return Status::Corruption("corrupted compressed block contents");
+                }
+
+                // uncompress contents
+                char* ubuf = new char[ulength];
+                if (!port::Snappy_Uncompress(data, n, ubuf)) {
+                    delete[] buf;
+                    delete[] ubuf;
+                    return Status::Corruption("corrupted compressed block contents");
+                }
+
+                // 解压后的数据都需要 reader 自己去管理
+                delete[] buf;
+                result->data = Slice(ubuf, ulength);
+                result->heap_allocated = true;
+                result->cachable = true;
+                break;
+            }
+        default:
+            delete[] buf;
+            return Status::Corruption("bad block type");
+    }
+
+    return Status::OK();
 }
 
 }  // namespace leveldb

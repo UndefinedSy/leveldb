@@ -29,7 +29,7 @@ struct Table::Rep {
     RandomAccessFile* file;
     uint64_t cache_id;
     FilterBlockReader* filter;
-    const char* filter_data;
+    const char* filter_data;    // set if need to handle delete[]
 
     BlockHandle metaindex_handle;  // Handle to metaindex_block: saved from footer
     Block* index_block;
@@ -83,6 +83,7 @@ Table::Open(const Options& options, RandomAccessFile* file, uint64_t size,
     return s;
 }
 
+// 尝试读出 filter_policy 所指向的 filter 的 value 部分
 void
 Table::ReadMeta(const Footer& footer)
 {
@@ -95,6 +96,7 @@ Table::ReadMeta(const Footer& footer)
     if (rep_->options.paranoid_checks)
         opt.verify_checksums = true;
 
+    // read meta contents (filter & stats)
     BlockContents contents;
     if (!ReadBlock(rep_->file, opt, footer.metaindex_handle(), &contents).ok()) {
         // Do not propagate errors since meta info is not needed for operation
@@ -102,6 +104,7 @@ Table::ReadMeta(const Footer& footer)
     }
     Block* meta = new Block(contents);
 
+    // 读取对应 filter.xxx 的 value 部分
     Iterator* iter = meta->NewIterator(BytewiseComparator());
     std::string key = "filter.";
     key.append(rep_->options.filter_policy->Name());
@@ -113,27 +116,36 @@ Table::ReadMeta(const Footer& footer)
     delete meta;
 }
 
-void Table::ReadFilter(const Slice& filter_handle_value) {
-  Slice v = filter_handle_value;
-  BlockHandle filter_handle;
-  if (!filter_handle.DecodeFrom(&v).ok()) {
-    return;
-  }
+/**
+ * 
+ * @param filter_handle_value, value part of the specified filter.xxx name
+ */
+void
+Table::ReadFilter(const Slice& filter_handle_value)
+{
+    // 通过 filter_handle_value 解析 filter block 的  BlockHandle
+    Slice v = filter_handle_value;
+    BlockHandle filter_handle;
+    if (!filter_handle.DecodeFrom(&v).ok()) {
+        return;
+    }
 
-  // We might want to unify with ReadBlock() if we start
-  // requiring checksum verification in Table::Open.
-  ReadOptions opt;
-  if (rep_->options.paranoid_checks) {
-    opt.verify_checksums = true;
-  }
-  BlockContents block;
-  if (!ReadBlock(rep_->file, opt, filter_handle, &block).ok()) {
-    return;
-  }
-  if (block.heap_allocated) {
-    rep_->filter_data = block.data.data();  // Will need to delete later
-  }
-  rep_->filter = new FilterBlockReader(rep_->options.filter_policy, block.data);
+    // We might want to unify with ReadBlock() if we start
+    // requiring checksum verification in Table::Open.
+    // 如果要求在 Table::Open 中进行 checksum 校验，可能会想和 ReadBlock() 统一起来
+    ReadOptions opt;
+    if (rep_->options.paranoid_checks) {
+        opt.verify_checksums = true;
+    }
+
+    BlockContents block;
+    if (!ReadBlock(rep_->file, opt, filter_handle, &block).ok()) {
+        return;
+    }
+    if (block.heap_allocated) {
+        rep_->filter_data = block.data.data();  // Will need to delete later
+    }
+    rep_->filter = new FilterBlockReader(rep_->options.filter_policy, block.data);
 }
 
 Table::~Table() { delete rep_; }
@@ -210,10 +222,12 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
   return iter;
 }
 
-Iterator* Table::NewIterator(const ReadOptions& options) const {
-  return NewTwoLevelIterator(
-      rep_->index_block->NewIterator(rep_->options.comparator),
-      &Table::BlockReader, const_cast<Table*>(this), options);
+Iterator*
+Table::NewIterator(const ReadOptions& options) const
+{
+    return NewTwoLevelIterator(
+        rep_->index_block->NewIterator(rep_->options.comparator),
+        &Table::BlockReader, const_cast<Table*>(this), options);
 }
 
 Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,

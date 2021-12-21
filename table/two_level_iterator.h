@@ -20,11 +20,20 @@ struct ReadOptions;
 //
 // Uses a supplied function to convert an index_iter value into
 // an iterator over the contents of the corresponding block.
+/**
+ * Return a new two-level iterator.
+ * two-level iterator 包含一个 index iterator,
+ * 其 values 指向一连串的 blocks, 每个 block 是一系列的 kv pairs
+ * 返回的 two-level iterator 可以生成按照 blocks sequence 的所有 kv pairs 的串联
+ * two-level iterator 持有 index_iter 的所有权，并应在不再需要时将其删除。
+ * 
+ * two-level iterator 会使用所提供的 func 来将 index_iter value 转换为遍历对应 block contents 的 iter
+ */
 Iterator* NewTwoLevelIterator(
     Iterator* index_iter,
-    Iterator* (*block_function)(void* arg, const ReadOptions& options,
-                                const Slice& index_value),
-    void* arg, const ReadOptions& options);
+    Iterator* (*block_function)(void* arg, const ReadOptions& options, const Slice& index_value),
+    void* arg,
+    const ReadOptions& options);
 
 }  // namespace leveldb
 
