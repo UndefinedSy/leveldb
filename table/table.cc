@@ -27,9 +27,9 @@ struct Table::Rep {
     Options options;
     Status status;
     RandomAccessFile* file;
-    uint64_t cache_id;
-    FilterBlockReader* filter;
-    const char* filter_data;    // set if need to handle delete[]
+    uint64_t cache_id;	// BlockCache for this table
+    FilterBlockReader* filter;	// FilterBlock 的 Reader
+    const char* filter_data;    // 非 nullptr 则表示需要调用者 handle delete[]
 
     BlockHandle metaindex_handle;  // Handle to metaindex_block: saved from footer
     Block* index_block;
@@ -150,84 +150,127 @@ Table::ReadFilter(const Slice& filter_handle_value)
 
 Table::~Table() { delete rep_; }
 
-static void DeleteBlock(void* arg, void* ignored) {
-  delete reinterpret_cast<Block*>(arg);
+// Iterator 的 Cleanup Func, 用于清理没有 block cache 情况下的 block
+static void
+DeleteBlock(void* arg, void* ignored)
+{
+  	delete reinterpret_cast<Block*>(arg);
 }
 
-static void DeleteCachedBlock(const Slice& key, void* value) {
-  Block* block = reinterpret_cast<Block*>(value);
-  delete block;
+// block cache 中的 deleter
+static void
+DeleteCachedBlock(const Slice& key, void* value)
+{
+	Block* block = reinterpret_cast<Block*>(value);
+	delete block;
 }
 
-static void ReleaseBlock(void* arg, void* h) {
-  Cache* cache = reinterpret_cast<Cache*>(arg);
-  Cache::Handle* handle = reinterpret_cast<Cache::Handle*>(h);
-  cache->Release(handle);
+/**
+ * Iterator 的Cleanup Func, 用于清理有 block cache 情况下的 cache handle
+ * @param arg, block_cache
+ * @param h, cache handle
+ */
+static void
+ReleaseBlock(void* arg, void* h)
+{
+	Cache* cache = reinterpret_cast<Cache*>(arg);
+	Cache::Handle* handle = reinterpret_cast<Cache::Handle*>(h);
+	cache->Release(handle);
 }
 
-// Convert an index iterator value (i.e., an encoded BlockHandle)
-// into an iterator over the contents of the corresponding block.
-Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
-                             const Slice& index_value) {
-  Table* table = reinterpret_cast<Table*>(arg);
-  Cache* block_cache = table->rep_->options.block_cache;
-  Block* block = nullptr;
-  Cache::Handle* cache_handle = nullptr;
+/**
+ * 将一个  index iter value（即一个 encoded BlockHandle）转换成一个对应 block 的 iterator
+ * @param arg[IN], const_cast<Table*>(this)
+ * @param options[IN], Table::NewIterator 传入的 ReadOptions
+ * @param index_value[IN], index iter 所指向的 kv pair 的 value
+ */
+Iterator*
+Table::BlockReader(void* arg, const ReadOptions& options,
+				   const Slice& index_value)
+{
+	Table* table = reinterpret_cast<Table*>(arg);
+	Cache* block_cache = table->rep_->options.block_cache;
+	Block* block = nullptr;					// 目标 block 的 reader
+	Cache::Handle* cache_handle = nullptr;	// block cache 中 index value 所对应的 block
 
-  BlockHandle handle;
-  Slice input = index_value;
-  Status s = handle.DecodeFrom(&input);
-  // We intentionally allow extra stuff in index_value so that we
-  // can add more features in the future.
+	// handle 指向了 index value 所索引的 data block 的 offset 和 size
+	BlockHandle handle;
+	Slice input = index_value;
+	Status s = handle.DecodeFrom(&input);
+	// 我们有意允许在 index_value 中添加额外的信息，以便在未来可以添加更多的功能
 
-  if (s.ok()) {
-    BlockContents contents;
-    if (block_cache != nullptr) {
-      char cache_key_buffer[16];
-      EncodeFixed64(cache_key_buffer, table->rep_->cache_id);
-      EncodeFixed64(cache_key_buffer + 8, handle.offset());
-      Slice key(cache_key_buffer, sizeof(cache_key_buffer));
-      cache_handle = block_cache->Lookup(key);
-      if (cache_handle != nullptr) {
-        block = reinterpret_cast<Block*>(block_cache->Value(cache_handle));
-      } else {
-        s = ReadBlock(table->rep_->file, options, handle, &contents);
-        if (s.ok()) {
-          block = new Block(contents);
-          if (contents.cachable && options.fill_cache) {
-            cache_handle = block_cache->Insert(key, block, block->size(),
-                                               &DeleteCachedBlock);
-          }
-        }
-      }
-    } else {
-      s = ReadBlock(table->rep_->file, options, handle, &contents);
-      if (s.ok()) {
-        block = new Block(contents);
-      }
-    }
-  }
+	// 根据 index value 找到目标 block
+	if (s.ok())
+	{
+		BlockContents contents;
+		if (block_cache != nullptr) // 有 block cache
+		{
+			// cache key 为 <cache_id>[8] + <block_offset>[8]
+			char cache_key_buffer[16];
+			EncodeFixed64(cache_key_buffer, table->rep_->cache_id);
+			EncodeFixed64(cache_key_buffer + 8, handle.offset());
 
-  Iterator* iter;
-  if (block != nullptr) {
-    iter = block->NewIterator(table->rep_->options.comparator);
-    if (cache_handle == nullptr) {
-      iter->RegisterCleanup(&DeleteBlock, block, nullptr);
-    } else {
-      iter->RegisterCleanup(&ReleaseBlock, block_cache, cache_handle);
-    }
-  } else {
-    iter = NewErrorIterator(s);
-  }
-  return iter;
+			// 尝试在 block cache 中找对应的 block
+			Slice key(cache_key_buffer, sizeof(cache_key_buffer));
+			cache_handle = block_cache->Lookup(key);
+			if (cache_handle != nullptr) // Found
+			{
+				block = reinterpret_cast<Block*>(block_cache->Value(cache_handle));
+			}
+			else // Missed
+			{
+				s = ReadBlock(table->rep_->file, options, handle, &contents);
+				if (s.ok())
+				{
+					block = new Block(contents);
+					// 更新 block cache
+					if (contents.cachable && options.fill_cache)
+					{
+						cache_handle = block_cache->Insert(key, block, block->size(),
+														   &DeleteCachedBlock);
+					}
+				}
+			}
+		}
+		else // 没有 block cache
+		{
+			s = ReadBlock(table->rep_->file, options, handle, &contents);
+			if (s.ok())
+			{
+				block = new Block(contents);
+			}
+		}
+	}
+
+	Iterator* iter;
+	if (block != nullptr)
+	{
+		iter = block->NewIterator(table->rep_->options.comparator);
+		// 注册该 iterator 的 cleanup function
+		if (cache_handle == nullptr)	// 没有 block cache
+		{
+			iter->RegisterCleanup(&DeleteBlock, block, nullptr);
+		}
+		else	// 有 block cache
+		{
+			iter->RegisterCleanup(&ReleaseBlock, block_cache, cache_handle);
+		}
+	}
+	else // Failed to get the corresponding block
+	{
+		iter = NewErrorIterator(s);
+	}
+	return iter;
 }
 
 Iterator*
 Table::NewIterator(const ReadOptions& options) const
 {
     return NewTwoLevelIterator(
-        rep_->index_block->NewIterator(rep_->options.comparator),
-        &Table::BlockReader, const_cast<Table*>(this), options);
+        /*Iterator*/ rep_->index_block->NewIterator(rep_->options.comparator),
+        /*BlockFunction*/ &Table::BlockReader,
+		/*BlockFunc arg*/ const_cast<Table*>(this),
+		/*ReadOptions*/ options);
 }
 
 Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,

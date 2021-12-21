@@ -27,7 +27,8 @@ struct ReadOptions;
  * 返回的 two-level iterator 可以生成按照 blocks sequence 的所有 kv pairs 的串联
  * two-level iterator 持有 index_iter 的所有权，并应在不再需要时将其删除。
  * 
- * two-level iterator 会使用所提供的 func 来将 index_iter value 转换为遍历对应 block contents 的 iter
+ * two-level iterator 会使用所提供的 func 来将 index_iter value 转换为
+ * 遍历对应 block contents 的 iterator
  */
 Iterator* NewTwoLevelIterator(
     Iterator* index_iter,
