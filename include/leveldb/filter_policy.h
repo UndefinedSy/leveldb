@@ -25,30 +25,22 @@ namespace leveldb {
 class Slice;
 
 class LEVELDB_EXPORT FilterPolicy {
- public:
-  virtual ~FilterPolicy();
+public:
+    virtual ~FilterPolicy();
 
-  // Return the name of this policy.  Note that if the filter encoding
-  // changes in an incompatible way, the name returned by this method
-  // must be changed.  Otherwise, old incompatible filters may be
-  // passed to methods of this type.
-  virtual const char* Name() const = 0;
+    // 返回该 filter policy 的 name
+    // 注意，如果该 filter 的编码以不兼容的方式发生了改变，则这个方法返回的名称必须改变
+    // 否则，旧的不兼容的 filters 可能被传递给新的 type 的相应的 methods
+    virtual const char* Name() const = 0;
 
-  // keys[0,n-1] contains a list of keys (potentially with duplicates)
-  // that are ordered according to the user supplied comparator.
-  // Append a filter that summarizes keys[0,n-1] to *dst.
-  //
-  // Warning: do not change the initial contents of *dst.  Instead,
-  // append the newly constructed filter to *dst.
-  virtual void CreateFilter(const Slice* keys, int n,
-                            std::string* dst) const = 0;
+    // keys[0,n-1] 包含一个 keys list(可能重复), 这些 keys 按用户提供的 comparator 排序
+    // 该方法将一个 summarize keys[0,n-1] 的 filter 给 append 到 *dst
+    // 
+    // 警告：不要改变 *dst 的初始内容, 总是应该将新构建的 filter 给 append 到 *dst
+    virtual void CreateFilter(const Slice* keys, int n,
+                              std::string* dst) const = 0;
 
-  // "filter" contains the data appended by a preceding call to
-  // CreateFilter() on this class.  This method must return true if
-  // the key was in the list of keys passed to CreateFilter().
-  // This method may return true or false if the key was not on the
-  // list, but it should aim to return false with a high probability.
-  virtual bool KeyMayMatch(const Slice& key, const Slice& filter) const = 0;
+    virtual bool KeyMayMatch(const Slice& key, const Slice& filter) const = 0;
 };
 
 // Return a new filter policy that uses a bloom filter with approximately
