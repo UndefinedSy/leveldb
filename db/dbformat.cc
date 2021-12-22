@@ -112,20 +112,21 @@ void InternalKeyComparator::FindShortSuccessor(std::string* key) const {
 
 const char* InternalFilterPolicy::Name() const { return user_policy_->Name(); }
 
-void InternalFilterPolicy::CreateFilter(const Slice* keys, int n,
-                                        std::string* dst) const {
-  // We rely on the fact that the code in table.cc does not mind us
-  // adjusting keys[].
-  Slice* mkey = const_cast<Slice*>(keys);
-  for (int i = 0; i < n; i++) {
-    mkey[i] = ExtractUserKey(keys[i]);
-    // TODO(sanjay): Suppress dups?
-  }
-  user_policy_->CreateFilter(keys, n, dst);
+void
+InternalFilterPolicy::CreateFilter(const Slice* keys, int n, std::string* dst) const
+{
+	// 这里认为 table.cc 中的代码不介意调整 keys[]
+	Slice* mkey = const_cast<Slice*>(keys);
+	for (int i = 0; i < n; i++) {
+		mkey[i] = ExtractUserKey(keys[i]);
+		// TODO(sanjay): Suppress dups?
+	}
+	user_policy_->CreateFilter(keys, n, dst);
 }
 
-bool InternalFilterPolicy::KeyMayMatch(const Slice& key, const Slice& f) const {
-  return user_policy_->KeyMayMatch(ExtractUserKey(key), f);
+bool
+InternalFilterPolicy::KeyMayMatch(const Slice& key, const Slice& f) const {
+    return user_policy_->KeyMayMatch(ExtractUserKey(key), f);
 }
 
 LookupKey::LookupKey(const Slice& user_key, SequenceNumber s) {

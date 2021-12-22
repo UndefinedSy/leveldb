@@ -118,16 +118,19 @@ public:
     int Compare(const InternalKey& a, const InternalKey& b) const;
 };
 
-// Filter policy wrapper that converts from internal keys to user keys
-class InternalFilterPolicy : public FilterPolicy {
- private:
-  const FilterPolicy* const user_policy_;
 
- public:
-  explicit InternalFilterPolicy(const FilterPolicy* p) : user_policy_(p) {}
-  const char* Name() const override;
-  void CreateFilter(const Slice* keys, int n, std::string* dst) const override;
-  bool KeyMayMatch(const Slice& key, const Slice& filter) const override;
+// 对 FilterPolicy 的 wrapper， 以方便地对 InternalKey 做过滤
+// 该 wrapper 类会将 InternalKey 的 UserKey 部分用于 Filter Policy
+class InternalFilterPolicy : public FilterPolicy
+{
+private:
+    const FilterPolicy* const user_policy_;
+
+public:
+    explicit InternalFilterPolicy(const FilterPolicy* p) : user_policy_(p) {}
+    const char* Name() const override;
+    void CreateFilter(const Slice* keys, int n, std::string* dst) const override;
+    bool KeyMayMatch(const Slice& key, const Slice& filter) const override;
 };
 
 // Modules in this directory should keep internal keys wrapped inside

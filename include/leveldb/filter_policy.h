@@ -43,20 +43,17 @@ public:
     virtual bool KeyMayMatch(const Slice& key, const Slice& filter) const = 0;
 };
 
-// Return a new filter policy that uses a bloom filter with approximately
-// the specified number of bits per key.  A good value for bits_per_key
-// is 10, which yields a filter with ~ 1% false positive rate.
-//
-// Callers must delete the result after any database that is using the
-// result has been closed.
-//
-// Note: if you are using a custom comparator that ignores some parts
-// of the keys being compared, you must not use NewBloomFilterPolicy()
-// and must provide your own FilterPolicy that also ignores the
-// corresponding parts of the keys.  For example, if the comparator
-// ignores trailing spaces, it would be incorrect to use a
-// FilterPolicy (like NewBloomFilterPolicy) that does not ignore
-// trailing spaces in keys.
+
+// 返回一个新的使用 bloom filter 的 filter policy
+// 该 filter policy 对于每个 key 大约会有 bit_per_key 个 bits
+// bits_per_key 一个很好的值是 10，这样的 filter policy 的 false positive rate ~1%
+// 
+// 调用者必须在任何使用该 result 的 Database 关闭后删除该 result
+// 
+// 注意：如果使用的自定义 comparator 会忽略掉 keys 的某些部分
+// 则不能使用 NewBloomFilterPolicy(), 必须提供自定义 FilterPolicy, 以忽略 keys 的相应部分
+// 例如，一个 comparator 会忽略尾部的空格，那么使用一个不会忽略键 keys 中尾部空格
+// 的 FilterPolicy（如 NewBloomFilterPolicy()）是不正确的
 LEVELDB_EXPORT const FilterPolicy* NewBloomFilterPolicy(int bits_per_key);
 
 }  // namespace leveldb
