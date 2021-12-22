@@ -273,61 +273,93 @@ Table::NewIterator(const ReadOptions& options) const
 		/*ReadOptions*/ options);
 }
 
-Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,
-                          void (*handle_result)(void*, const Slice&,
-                                                const Slice&)) {
-  Status s;
-  Iterator* iiter = rep_->index_block->NewIterator(rep_->options.comparator);
-  iiter->Seek(k);
-  if (iiter->Valid()) {
-    Slice handle_value = iiter->value();
-    FilterBlockReader* filter = rep_->filter;
-    BlockHandle handle;
-    if (filter != nullptr && handle.DecodeFrom(&handle_value).ok() &&
-        !filter->KeyMayMatch(handle.offset(), k)) {
-      // Not found
-    } else {
-      Iterator* block_iter = BlockReader(this, options, iiter->value());
-      block_iter->Seek(k);
-      if (block_iter->Valid()) {
-        (*handle_result)(arg, block_iter->key(), block_iter->value());
-      }
-      s = block_iter->status();
-      delete block_iter;
+/**
+ * 在调用 Seek(key) 之后对找到的 entry 调用 (*handle_result)(arg, ...)
+ * 如果 filter policy 显示 key 不存在则不能进行这样的调用
+ * Used by TableCache
+ * @param k, key to get
+ * @param arg, handle_result func 所使用的参数
+ * @param handle_result, 在 data block 中 seek 到了 key 后对 kv pair 使用的回调函数
+ * @return 返回过程中是否存在错误
+ */
+Status
+Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,
+                   void (*handle_result)(void*, const Slice&, const Slice&))
+{
+    Status s;
+
+    // 通过 index 查找 key 所在的 data block
+    Iterator* iiter = rep_->index_block->NewIterator(rep_->options.comparator);
+    iiter->Seek(k);
+
+    if (iiter->Valid())
+    {
+        Slice handle_value = iiter->value();
+        FilterBlockReader* filter = rep_->filter;
+        BlockHandle handle;
+
+        // 如果有 filter 则通过 filter 快速查找 key 是否可能存在(可能 false positive)
+        if (filter != nullptr
+            && handle.DecodeFrom(&handle_value).ok()
+            && !filter->KeyMayMatch(handle.offset(), k))
+        {
+            // Not found
+        }
+        else // 可能存在
+        {
+            // 定位到 block 中第一个 >= k 的位置
+            Iterator* block_iter = BlockReader(this, options, iiter->value());
+            block_iter->Seek(k);
+            
+            // 若 block_iter 有效则对该 key-value 调用传入的 handler func
+            if (block_iter->Valid())
+                (*handle_result)(arg, block_iter->key(), block_iter->value());
+            
+            s = block_iter->status();
+            delete block_iter;
+        }
     }
-  }
-  if (s.ok()) {
-    s = iiter->status();
-  }
-  delete iiter;
-  return s;
+
+    if (s.ok())
+    {
+        s = iiter->status();
+    }
+    delete iiter;
+    return s;
 }
 
-uint64_t Table::ApproximateOffsetOf(const Slice& key) const {
-  Iterator* index_iter =
-      rep_->index_block->NewIterator(rep_->options.comparator);
-  index_iter->Seek(key);
-  uint64_t result;
-  if (index_iter->Valid()) {
-    BlockHandle handle;
-    Slice input = index_iter->value();
-    Status s = handle.DecodeFrom(&input);
-    if (s.ok()) {
-      result = handle.offset();
-    } else {
-      // Strange: we can't decode the block handle in the index block.
-      // We'll just return the offset of the metaindex block, which is
-      // close to the whole file size for this case.
-      result = rep_->metaindex_handle.offset();
+uint64_t
+Table::ApproximateOffsetOf(const Slice& key) const
+{
+    // Seek input key 所在的 block
+    Iterator* index_iter = rep_->index_block->NewIterator(rep_->options.comparator);
+    index_iter->Seek(key);
+
+    uint64_t result;
+    if (index_iter->Valid())
+    {
+        BlockHandle handle;
+        Slice input = index_iter->value();
+        Status s = handle.DecodeFrom(&input);
+        if (s.ok()) // 通过 index 找到 `key` 所在的 block, 返回该 block 的 offset
+        {
+            result = handle.offset();
+        }
+        else
+        {
+            // 异常场景: 找到了 key 所在 block, 但无法 Decode 该 block handle
+            // 这种情况也返回 metaindex block 的 offset
+            result = rep_->metaindex_handle.offset();
+        }
     }
-  } else {
-    // key is past the last key in the file.  Approximate the offset
-    // by returning the offset of the metaindex block (which is
-    // right near the end of the file).
-    result = rep_->metaindex_handle.offset();
-  }
-  delete index_iter;
-  return result;
+    else // 不在 index range 中
+    {
+        // `key` 已超过当前文件的 last key
+        // 这里返回 metaindex block 的 offset 作为 Approximate offset
+        result = rep_->metaindex_handle.offset();
+    }
+    delete index_iter;
+    return result;
 }
 
 }  // namespace leveldb

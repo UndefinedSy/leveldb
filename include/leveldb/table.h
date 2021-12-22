@@ -48,16 +48,10 @@ public:
     // NewIterator() 返回的 Iterator 最初是无效的, caller 需在使用它之前调用 Seek()
     Iterator* NewIterator(const ReadOptions&) const;
 
-  // Given a key, return an approximate byte offset in the file where
-  // the data for that key begins (or would begin if the key were
-  // present in the file).  The returned value is in terms of file
-  // bytes, and so includes effects like compression of the underlying data.
-  // E.g., the approximate offset of the last key in the table will
-  // be close to the file length.
-    // 返回入参的 key 的 data(value?) 在文件中的一个 approximate byte offset
-    // （或如果该键在文件中存在，则开始）。
+    // 返回入参的 key 的 data 在文件中的 approximate byte offset
     // 返回值是以 file bytes 为单位的，因此包括了对数据做压缩等操作的效果
-    // 例如，table 的最后一个键的 approximate offset 会是一个接近于 file length 的结果
+    // 如果找到了会返回 key 所在的 datablock 的 offset
+    // 否则返回 metaindex block 的 offset
     uint64_t ApproximateOffsetOf(const Slice& key) const;
 
 private:
@@ -70,6 +64,7 @@ private:
 
     // 在调用 Seek(key) 之后对找到的 entry 调用 (*handle_result)(arg, ...)
     // 如果 filter policy 显示 key 不存在则不能进行这样的调用
+    // Used by TableCache
     Status InternalGet(const ReadOptions&, const Slice& key, void* arg,
                        void (*handle_result)(void* arg, const Slice& k, const Slice& v));
 
