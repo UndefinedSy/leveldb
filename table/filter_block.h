@@ -43,24 +43,26 @@ private:
 
     const FilterPolicy* policy_;
     std::string keys_;             // Flattened key contents
-    std::vector<size_t> start_;    // 每个 key 在 `keys_` 中的 Starting index
+    std::vector<size_t> start_;    // 每个 key 在 `keys_` 中的 Starting offset
     std::string result_;           // 目前为止计算出的 filter data
     std::vector<Slice> tmp_keys_;  // 用于 policy_->CreateFilter() 的参数
     std::vector<uint32_t> filter_offsets_;  // 各 filters 在 `result_` 中的位置
 };
 
-class FilterBlockReader {
- public:
-  // REQUIRES: "contents" and *policy must stay live while *this is live.
-  FilterBlockReader(const FilterPolicy* policy, const Slice& contents);
-  bool KeyMayMatch(uint64_t block_offset, const Slice& key);
+class FilterBlockReader
+{
+public:
+    // REQUIRES: *this 处于 live 时, "contents" 和 *policy 必须保持 live
+    FilterBlockReader(const FilterPolicy* policy, const Slice& contents);
 
- private:
-  const FilterPolicy* policy_;
-  const char* data_;    // Pointer to filter data (at block-start)
-  const char* offset_;  // Pointer to beginning of offset array (at block-end)
-  size_t num_;          // Number of entries in offset array
-  size_t base_lg_;      // Encoding parameter (see kFilterBaseLg in .cc file)
+    bool KeyMayMatch(uint64_t block_offset, const Slice& key);
+
+private:
+    const FilterPolicy* policy_;
+    const char* data_;    // 指向 filter data (即 block-start)
+    const char* offset_;  // 指向 offset array 的起始 (即 block-end)
+    size_t num_;          // offset array 中的 entries 数量
+    size_t base_lg_;      // Encoding parameter (see kFilterBaseLg in .cc file)
 };
 
 }  // namespace leveldb
