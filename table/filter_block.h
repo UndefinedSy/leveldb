@@ -21,32 +21,32 @@ namespace leveldb {
 
 class FilterPolicy;
 
-// A FilterBlockBuilder is used to construct all of the filters for a
-// particular Table.  It generates a single string which is stored as
-// a special block in the Table.
-//
-// The sequence of calls to FilterBlockBuilder must match the regexp:
+// FilterBlockBuilder 用于构建一个 Table 的所有 filters
+// FilterBlockBuilder 会生成一个 string, 并作为一个特殊的 block 存储在 Table 中
+// 
+// 对 FilterBlockBuilder 的调用顺序必须符合如下 regexp 所表示的顺序:
 //      (StartBlock AddKey*)* Finish
-class FilterBlockBuilder {
- public:
-  explicit FilterBlockBuilder(const FilterPolicy*);
+class FilterBlockBuilder
+{
+public:
+    explicit FilterBlockBuilder(const FilterPolicy*);
 
-  FilterBlockBuilder(const FilterBlockBuilder&) = delete;
-  FilterBlockBuilder& operator=(const FilterBlockBuilder&) = delete;
+    FilterBlockBuilder(const FilterBlockBuilder&) = delete;
+    FilterBlockBuilder& operator=(const FilterBlockBuilder&) = delete;
 
-  void StartBlock(uint64_t block_offset);
-  void AddKey(const Slice& key);
-  Slice Finish();
+    void StartBlock(uint64_t block_offset);
+    void AddKey(const Slice& key);
+    Slice Finish();
 
- private:
-  void GenerateFilter();
+private:
+    void GenerateFilter();
 
-  const FilterPolicy* policy_;
-  std::string keys_;             // Flattened key contents
-  std::vector<size_t> start_;    // Starting index in keys_ of each key
-  std::string result_;           // Filter data computed so far
-  std::vector<Slice> tmp_keys_;  // policy_->CreateFilter() argument
-  std::vector<uint32_t> filter_offsets_;
+    const FilterPolicy* policy_;
+    std::string keys_;             // Flattened key contents
+    std::vector<size_t> start_;    // 每个 key 在 `keys_` 中的 Starting index
+    std::string result_;           // 目前为止计算出的 filter data
+    std::vector<Slice> tmp_keys_;  // 用于 policy_->CreateFilter() 的参数
+    std::vector<uint32_t> filter_offsets_;  // 各 filters 在 `result_` 中的位置
 };
 
 class FilterBlockReader {
