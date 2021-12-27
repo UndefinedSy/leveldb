@@ -2,9 +2,9 @@
   Use of this source code is governed by a BSD-style license that can be
   found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-  C bindings for leveldb.  May be useful as a stable ABI that can be
-  used by programs that keep leveldb in a shared library, or for
-  a JNI api.
+  C bindings for leveldb.
+  作为一个稳定的 ABI(Application Binary Interface) 可将 leveldb 作为 shared library 使用
+  也可用于 JNI(Java Native Interface) api
 
   Does not support:
   . getters for the option types
@@ -13,24 +13,20 @@
 
   Some conventions:
 
-  (1) We expose just opaque struct pointers and functions to clients.
-  This allows us to change internal representations without having to
-  recompile clients.
-
-  (2) For simplicity, there is no equivalent to the Slice type.  Instead,
-  the caller has to pass the pointer and length as separate
-  arguments.
-
-  (3) Errors are represented by a null-terminated c string.  NULL
-  means no error.  All operations that can raise an error are passed
-  a "char** errptr" as the last argument.  One of the following must
-  be true on entry:
-     *errptr == NULL
-     *errptr points to a malloc()ed null-terminated error message
-       (On Windows, *errptr must have been malloc()-ed by this library.)
-  On success, a leveldb routine leaves *errptr unchanged.
-  On failure, leveldb frees the old value of *errptr and
-  set *errptr to a malloc()ed error message.
+  (1) 只向 client 暴露了 opaque struct pointer 和 functions. 
+      这使得可以在不 recompile clients 的情况下该边 leveldb 的内部实现
+  
+  (2) 为了简单起见，没有提供一个与 Slice type 等价的东西.
+      调用者必须将 pointer 和 length 作为独立的参数显式传递
+  
+  (3) Errors 表示为一个 null-terminated 的 C string. NULL 表示 no error.
+      所有可能会引发错误的操作都会传入一个 "char** errptr" 作为 last argument
+      下列情况之一必定为真:
+      - *errptr == NULL
+      - *errptr 指向一个 malloc()-ed null-terminated 错误信息 
+        (Windows 中, *errptr 必须是通过该 lib malloc() 的)
+      成功时，leveldb routine 不会修改 *errptr。
+      失败时，leveldb 会释放旧的 *errptr，并将 *errptr 置为一个 malloc()-ed error message
 
   (4) Bools have the type uint8_t (0 == false; rest == true)
 

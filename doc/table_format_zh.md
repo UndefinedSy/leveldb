@@ -40,7 +40,7 @@ for an explanation of varint64 format.
   - key 是一个 string，它 $\geq$ 对应 datablock 中的最后一个 key，且 $<$ 后继 data block 的第一个 key。
   - value 是对应 data block 的 BlockHandle。
 
-- 文件的末尾是一个固定长度的 footer，其中包含了 metainfex block 和 index block 的 BlockHandle 以及一个 magic number。
+- 文件的末尾是一个固定长度的 footer，其中包含了 metaindex block 和 index block 的 BlockHandle 以及一个 magic number。
     > ```
     >     metaindex_handle: char[p];     // Block handle for metaindex
     >     index_handle:     char[q];     // Block handle for index

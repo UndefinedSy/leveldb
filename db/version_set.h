@@ -2,15 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 //
-// The representation of a DBImpl consists of a set of Versions.  The
-// newest version is called "current".  Older versions may be kept
-// around to provide a consistent view to live iterators.
-//
-// Each Version keeps track of a set of Table files per level.  The
-// entire set of versions is maintained in a VersionSet.
-//
-// Version,VersionSet are thread-compatible, but require external
-// synchronization on all accesses.
+// VersionSet 是一个由一组 Versions 组成的一个 DBImpl
+// 最新的 Version 称为 CURRENT
+// 对于较旧的 Versions 可能仍然会被保留，以提供对 live iterators 的一致性视图
+// 
+// 每个 Version 都会 track 每个 level 的一组 Table files
+// VersionSet 是所有 Versions 的集合
+// 
+// Version, VersionSet 都是 thread-compatible 的，但所有的访问都需要 external sync
 
 #ifndef STORAGE_LEVELDB_DB_VERSION_SET_H_
 #define STORAGE_LEVELDB_DB_VERSION_SET_H_
@@ -57,15 +56,16 @@ bool SomeFileOverlapsRange(const InternalKeyComparator& icmp,
                            const Slice* smallest_user_key,
                            const Slice* largest_user_key);
 
+// Version 是一个 sstable files 的集合，以及它管理的 compaction 状态
 class Version {
- public:
-  // Lookup the value for key.  If found, store it in *val and
-  // return OK.  Else return a non-OK status.  Fills *stats.
-  // REQUIRES: lock is not held
-  struct GetStats {
-    FileMetaData* seek_file;
-    int seek_file_level;
-  };
+public:
+	// Lookup the value for key.  If found, store it in *val and
+	// return OK.  Else return a non-OK status.  Fills *stats.
+	// REQUIRES: lock is not held
+	struct GetStats {
+		FileMetaData* seek_file;
+		int seek_file_level;
+	};
 
   // Append to *iters a sequence of iterators that will
   // yield the contents of this Version when merged together.
@@ -114,58 +114,62 @@ class Version {
   // Return a human readable string that describes this version's contents.
   std::string DebugString() const;
 
- private:
-  friend class Compaction;
-  friend class VersionSet;
+private:
+	friend class Compaction;
+	friend class VersionSet;
 
-  class LevelFileNumIterator;
+	class LevelFileNumIterator;
 
-  explicit Version(VersionSet* vset)
-      : vset_(vset),
-        next_(this),
-        prev_(this),
-        refs_(0),
-        file_to_compact_(nullptr),
-        file_to_compact_level_(-1),
-        compaction_score_(-1),
-        compaction_level_(-1) {}
+	explicit Version(VersionSet* vset)
+		: vset_(vset)
+		, next_(this)
+		, prev_(this)
+		, refs_(0)
+		, file_to_compact_(nullptr)
+		, file_to_compact_level_(-1)
+		, compaction_score_(-1)
+		, compaction_level_(-1) {}
 
-  Version(const Version&) = delete;
-  Version& operator=(const Version&) = delete;
+	Version(const Version&) = delete;
+	Version& operator=(const Version&) = delete;
 
-  ~Version();
+	~Version();
 
-  Iterator* NewConcatenatingIterator(const ReadOptions&, int level) const;
+	Iterator* NewConcatenatingIterator(const ReadOptions&, int level) const;
 
-  // Call func(arg, level, f) for every file that overlaps user_key in
-  // order from newest to oldest.  If an invocation of func returns
-  // false, makes no more calls.
-  //
-  // REQUIRES: user portion of internal_key == user_key.
-  void ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
-                          bool (*func)(void*, int, FileMetaData*));
+	// Call func(arg, level, f) for every file that overlaps user_key in
+	// order from newest to oldest.  If an invocation of func returns
+	// false, makes no more calls.
+	//
+	// REQUIRES: user portion of internal_key == user_key.
+	void ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
+							bool (*func)(void*, int, FileMetaData*));
 
-  VersionSet* vset_;  // VersionSet to which this Version belongs
-  Version* next_;     // Next version in linked list
-  Version* prev_;     // Previous version in linked list
-  int refs_;          // Number of live refs to this version
+	VersionSet* vset_;  // VersionSet to which this Version belongs
+	Version* next_;     // Next version in linked list
+	Version* prev_;     // Previous version in linked list
+	int refs_;          // Number of live refs to this version
 
-  // List of files per level
-  std::vector<FileMetaData*> files_[config::kNumLevels];
+	// 每层 level 的 sstable files
+	std::vector<FileMetaData*> files_[config::kNumLevels];
 
-  // Next file to compact based on seek stats.
-  FileMetaData* file_to_compact_;
-  int file_to_compact_level_;
+	// Next file to compact based on seek stats.
+	// 基于 seek stats 的下一个要 compact 的文件
+	FileMetaData* file_to_compact_;
+	int file_to_compact_level_;
 
-  // Level that should be compacted next and its compaction score.
-  // Score < 1 means compaction is not strictly needed.  These fields
-  // are initialized by Finalize().
-  double compaction_score_;
-  int compaction_level_;
+	// Level that should be compacted next and its compaction score.
+	// Score < 1 means compaction is not strictly needed.  These fields
+	// are initialized by Finalize().
+	// 接下来要被 compacted 的 level 和它的 compaction score
+	// Score < 1 意味着并不是紧迫地需要进行 compaction
+	// 这些字段是在 Finalize() 时初始化
+	double compaction_score_;
+	int compaction_level_;
 };
 
 class VersionSet {
- public:
+public:
   VersionSet(const std::string& dbname, const Options* options,
              TableCache* table_cache, const InternalKeyComparator*);
   VersionSet(const VersionSet&) = delete;
@@ -269,50 +273,54 @@ class VersionSet {
   };
   const char* LevelSummary(LevelSummaryStorage* scratch) const;
 
- private:
-  class Builder;
+private:
+	class Builder;
 
-  friend class Compaction;
-  friend class Version;
+	friend class Compaction;
+	friend class Version;
 
-  bool ReuseManifest(const std::string& dscname, const std::string& dscbase);
+	bool ReuseManifest(const std::string& dscname, const std::string& dscbase);
 
-  void Finalize(Version* v);
+	void Finalize(Version* v);
 
-  void GetRange(const std::vector<FileMetaData*>& inputs, InternalKey* smallest,
-                InternalKey* largest);
+	void GetRange(const std::vector<FileMetaData*>& inputs, InternalKey* smallest,
+					InternalKey* largest);
 
-  void GetRange2(const std::vector<FileMetaData*>& inputs1,
-                 const std::vector<FileMetaData*>& inputs2,
-                 InternalKey* smallest, InternalKey* largest);
+	void GetRange2(const std::vector<FileMetaData*>& inputs1,
+					const std::vector<FileMetaData*>& inputs2,
+					InternalKey* smallest, InternalKey* largest);
 
-  void SetupOtherInputs(Compaction* c);
+	void SetupOtherInputs(Compaction* c);
 
-  // Save current contents to *log
-  Status WriteSnapshot(log::Writer* log);
+	// Save current contents to *log
+	Status WriteSnapshot(log::Writer* log);
 
-  void AppendVersion(Version* v);
+	void AppendVersion(Version* v);
 
-  Env* const env_;
-  const std::string dbname_;
-  const Options* const options_;
-  TableCache* const table_cache_;
-  const InternalKeyComparator icmp_;
-  uint64_t next_file_number_;
-  uint64_t manifest_file_number_;
-  uint64_t last_sequence_;
-  uint64_t log_number_;
-  uint64_t prev_log_number_;  // 0 or backing store for memtable being compacted
+	Env* const env_;
+	const std::string dbname_;
+	const Options* const options_;
+	TableCache* const table_cache_;
+	const InternalKeyComparator icmp_;
 
-  // Opened lazily
-  WritableFile* descriptor_file_;
-  log::Writer* descriptor_log_;
-  Version dummy_versions_;  // Head of circular doubly-linked list of versions.
-  Version* current_;        // == dummy_versions_.prev_
+	// DB 相关的元信息
+	uint64_t next_file_number_;
+	uint64_t manifest_file_number_;
+	uint64_t last_sequence_;
+	uint64_t log_number_;
+	uint64_t prev_log_number_;  // 0 or backing store for memtable being compacted
 
-  // Per-level key at which the next compaction at that level should start.
-  // Either an empty string, or a valid InternalKey.
-  std::string compact_pointer_[config::kNumLevels];
+	// Opened lazily, MANIFEST 相关
+	WritableFile* descriptor_file_;
+	log::Writer* descriptor_log_;
+
+	// Opened lazily, Version 相关 
+	Version dummy_versions_;  // Head of circular doubly-linked list of versions.
+	Version* current_;        // == dummy_versions_.prev_
+
+	// Per-level 的 key, 标识了该 level 下一次 compaction 的 start
+	// 其或者是一个 empty string, 或者是一个有效的 InternalKey
+	std::string compact_pointer_[config::kNumLevels];
 };
 
 // A Compaction encapsulates information about a compaction.

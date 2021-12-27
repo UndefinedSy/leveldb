@@ -26,7 +26,8 @@ class Version;
 class VersionEdit;
 class VersionSet;
 
-class DBImpl : public DB {
+class DBImpl : public DB
+{
 public:
     DBImpl(const Options& options, const std::string& dbname);
 
@@ -164,7 +165,7 @@ private:
     const std::string dbname_;
 
     // table_cache_ provides its own synchronization
-    TableCache* const table_cache_;
+    TableCache* const table_cache_; // table cache 自身保证了线程安全
 
     // Lock over the persistent DB state.  Non-null iff successfully acquired.
     FileLock* db_lock_;
@@ -176,9 +177,9 @@ private:
     MemTable* mem_;
     MemTable* imm_ GUARDED_BY(mutex_);  // Memtable being compacted
     std::atomic<bool> has_imm_;         // So bg thread can detect non-null imm_
-    WritableFile* logfile_;
-    uint64_t logfile_number_ GUARDED_BY(mutex_);
-    log::Writer* log_;
+    WritableFile* logfile_; // log 文件
+    uint64_t logfile_number_ GUARDED_BY(mutex_);    // log file 的 file num
+    log::Writer* log_;  // log writer
     uint32_t seed_ GUARDED_BY(mutex_);  // For sampling.
 
     // Queue of writers.
