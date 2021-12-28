@@ -155,13 +155,14 @@ bool SomeFileOverlapsRange(const InternalKeyComparator& icmp,
   return !BeforeFile(ucmp, largest_user_key, files[index]);
 }
 
-// An internal iterator.  For a given version/level pair, yields
-// information about the files in the level.  For a given entry, key()
-// is the largest key that occurs in the file, and value() is an
-// 16-byte value containing the file number and file size, both
-// encoded using EncodeFixed64.
-class Version::LevelFileNumIterator : public Iterator {
- public:
+// An internal iterator.
+// 对于一个给定的 version/level pair, 生成关于该 level 中的 files 的信息
+// 对于一个给定的 entry
+// - key() 是该文件中出现的 largest key
+// - value() 是一个 16-byte 的值，包含了 file number 和 file size, 都是 EncodeFixed64 编码
+class Version::LevelFileNumIterator : public Iterator
+{
+public:
   LevelFileNumIterator(const InternalKeyComparator& icmp,
                        const std::vector<FileMetaData*>* flist)
       : icmp_(icmp), flist_(flist), index_(flist->size()) {  // Marks as invalid
@@ -207,41 +208,54 @@ class Version::LevelFileNumIterator : public Iterator {
   mutable char value_buf_[16];
 };
 
-static Iterator* GetFileIterator(void* arg, const ReadOptions& options,
-                                 const Slice& file_value) {
-  TableCache* cache = reinterpret_cast<TableCache*>(arg);
-  if (file_value.size() != 16) {
-    return NewErrorIterator(
-        Status::Corruption("FileReader invoked with unexpected value"));
-  } else {
-    return cache->NewIterator(options, DecodeFixed64(file_value.data()),
-                              DecodeFixed64(file_value.data() + 8));
-  }
-}
-
-Iterator* Version::NewConcatenatingIterator(const ReadOptions& options,
-                                            int level) const {
-  return NewTwoLevelIterator(
-      new LevelFileNumIterator(vset_->icmp_, &files_[level]), &GetFileIterator,
-      vset_->table_cache_, options);
-}
-
-void Version::AddIterators(const ReadOptions& options,
-                           std::vector<Iterator*>* iters) {
-  // Merge all level zero files together since they may overlap
-  for (size_t i = 0; i < files_[0].size(); i++) {
-    iters->push_back(vset_->table_cache_->NewIterator(
-        options, files_[0][i]->number, files_[0][i]->file_size));
-  }
-
-  // For levels > 0, we can use a concatenating iterator that sequentially
-  // walks through the non-overlapping files in the level, opening them
-  // lazily.
-  for (int level = 1; level < config::kNumLevels; level++) {
-    if (!files_[level].empty()) {
-      iters->push_back(NewConcatenatingIterator(options, level));
+static Iterator*
+GetFileIterator(void* arg, const ReadOptions& options, const Slice& file_value)
+{
+    TableCache* cache = reinterpret_cast<TableCache*>(arg);
+    if (file_value.size() != 16)
+    {
+        return NewErrorIterator(Status::Corruption("FileReader invoked with unexpected value"));
     }
-  }
+    else
+    {
+        return cache->NewIterator(options,
+                   /*file_number*/DecodeFixed64(file_value.data()),
+                     /*file_size*/DecodeFixed64(file_value.data() + 8));
+    }
+}
+
+Iterator*
+Version::NewConcatenatingIterator(const ReadOptions& options, int level) const
+{
+    return NewTwoLevelIterator(
+        /*index_iter*/new LevelFileNumIterator(vset_->icmp_, &files_[level]),
+        /*block_function*/&GetFileIterator, /*arg*/vset_->table_cache_,
+        /*ReadOptions*/options);
+}
+
+void
+Version::AddIterators(const ReadOptions& options,
+                      std::vector<Iterator*>* iters)
+{
+    // Merge all level zero files together since they may overlap
+    // 对于 level-0 的文件, 建立 Table Cache 的 iterator
+    // (TODO: 据说这会直接载入 sstable 文件到内存 cache)
+    for (size_t i = 0; i < files_[0].size(); i++)
+    {
+        iters->push_back(
+            vset_->table_cache_->NewIterator(
+                options, files_[0][i]->number, files_[0][i]->file_size));
+    }
+
+    // For levels > 0, we can use a concatenating iterator that sequentially
+    // walks through the non-overlapping files in the level, opening them
+    // lazily.
+    // 对于 level > 0 的部分, 建立每个 level 的 concatenating iterator(TwoLevelIterator)
+    // 这样的 iterator 可以 sequentially 的遍历该 level 中的 non-overlapping files
+    for (int level = 1; level < config::kNumLevels; level++) {
+        if (!files_[level].empty()) // 这采用的是一种 lazily opening 的方式
+            iters->push_back(NewConcatenatingIterator(options, level));
+    }
 }
 
 // Callback from TableCache::Get()

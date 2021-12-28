@@ -59,60 +59,68 @@ bool SomeFileOverlapsRange(const InternalKeyComparator& icmp,
 // Version 是一个 sstable files 的集合，以及它管理的 compaction 状态
 class Version {
 public:
-	// Lookup the value for key.  If found, store it in *val and
-	// return OK.  Else return a non-OK status.  Fills *stats.
-	// REQUIRES: lock is not held
 	struct GetStats {
 		FileMetaData* seek_file;
 		int seek_file_level;
 	};
 
-  // Append to *iters a sequence of iterators that will
-  // yield the contents of this Version when merged together.
-  // REQUIRES: This version has been saved (see VersionSet::SaveTo)
-  void AddIterators(const ReadOptions&, std::vector<Iterator*>* iters);
+    // Append to *iters a sequence of iterators that will
+    // yield the contents of this Version when merged together.
+    // 向 *iters 中 append 一系列的 iterators
+    // 这些 iterators 会在 merge 的时候生成该 Version 的内容
+    // REQUIRES: This version has been saved (see VersionSet::SaveTo)
+    void AddIterators(const ReadOptions&, std::vector<Iterator*>* iters);
 
-  Status Get(const ReadOptions&, const LookupKey& key, std::string* val,
-             GetStats* stats);
+    // 根据 key 查找对应的 value
+    // 如果找到则存入到 *val, 并返回 OK
+    // 如果没有找到则返回 non-OK. Fills *stats.
+    // REQUIRES: lock is not held
+    Status Get(const ReadOptions&, const LookupKey& key,
+               std::string* val, GetStats* stats);
 
-  // Adds "stats" into the current state.  Returns true if a new
-  // compaction may need to be triggered, false otherwise.
-  // REQUIRES: lock is held
-  bool UpdateStats(const GetStats& stats);
+    // 将 "stat" 添加到 current state
+    // 如果可能需要触发 compaction 则返回 true，否则返回 false。
+    // REQUIRES: lock is held
+    bool UpdateStats(const GetStats& stats);
 
-  // Record a sample of bytes read at the specified internal key.
-  // Samples are taken approximately once every config::kReadBytesPeriod
-  // bytes.  Returns true if a new compaction may need to be triggered.
-  // REQUIRES: lock is held
-  bool RecordReadSample(Slice key);
+    // Record a sample of bytes read at the specified internal key.
+    // Samples are taken approximately once every config::kReadBytesPeriod
+    // bytes.  Returns true if a new compaction may need to be triggered.
+    // 记录在传入的 internal key 上读取到的 sample 的 bytes
+    // 大约每 config::kReadBytesPeriod 个 bytes 会取一次 samples
+    // 如果需要出发一次 compaction 则返回 true
+    // REQUIRES: lock is held
+    bool RecordReadSample(Slice key);
 
-  // Reference count management (so Versions do not disappear out from
-  // under live iterators)
-  void Ref();
-  void Unref();
+    // Reference count management (so Versions do not disappear out from
+    // under live iterators)
+    void Ref();
+    void Unref();
 
-  void GetOverlappingInputs(
-      int level,
-      const InternalKey* begin,  // nullptr means before all keys
-      const InternalKey* end,    // nullptr means after all keys
-      std::vector<FileMetaData*>* inputs);
+    void GetOverlappingInputs(
+        int level,
+        const InternalKey* begin,  // nullptr means before all keys
+        const InternalKey* end,    // nullptr means after all keys
+        std::vector<FileMetaData*>* inputs);
 
-  // Returns true iff some file in the specified level overlaps
-  // some part of [*smallest_user_key,*largest_user_key].
-  // smallest_user_key==nullptr represents a key smaller than all the DB's keys.
-  // largest_user_key==nullptr represents a key largest than all the DB's keys.
-  bool OverlapInLevel(int level, const Slice* smallest_user_key,
-                      const Slice* largest_user_key);
+    // 如果在 `level` 中有文件与 [*smallest_user_key, *largest_user_key] 存在 overlap 则返回 true  
+    // smallest_user_key == nullptr 表示 DB 中最小的 key
+    // largest_user_key == nullptr 表示 DB 中最大的 key
+    bool OverlapInLevel(int level,
+                        const Slice* smallest_user_key,
+                        const Slice* largest_user_key);
 
-  // Return the level at which we should place a new memtable compaction
-  // result that covers the range [smallest_user_key,largest_user_key].
-  int PickLevelForMemTableOutput(const Slice& smallest_user_key,
-                                 const Slice& largest_user_key);
+    // Return the level at which we should place a new memtable compaction
+    // result that covers the range [smallest_user_key,largest_user_key].
+    // 返回我们需要在哪个 level 上执行一次新的 memtable compaction，  
+    // 该 compaction 覆盖了范围 [smallest_user_key, largest_user_key].  
+    int PickLevelForMemTableOutput(const Slice& smallest_user_key,
+                                   const Slice& largest_user_key);
 
-  int NumFiles(int level) const { return files_[level].size(); }
+    int NumFiles(int level) const { return files_[level].size(); }
 
-  // Return a human readable string that describes this version's contents.
-  std::string DebugString() const;
+    // Return a human readable string that describes this version's contents.
+    std::string DebugString() const;
 
 private:
 	friend class Compaction;
@@ -137,9 +145,8 @@ private:
 
 	Iterator* NewConcatenatingIterator(const ReadOptions&, int level) const;
 
-	// Call func(arg, level, f) for every file that overlaps user_key in
-	// order from newest to oldest.  If an invocation of func returns
-	// false, makes no more calls.
+    // 对每个与 user_key 存在 overlap 的文件, 按从新到旧的顺序调用 func(arg, level, f)
+    // 如果某次调用 func() 返回 false，则不再继续调用
 	//
 	// REQUIRES: user portion of internal_key == user_key.
 	void ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
