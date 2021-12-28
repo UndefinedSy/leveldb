@@ -38,7 +38,7 @@ class Version;
 class VersionSet;
 class WritableFile;
 
-// Return the smallest index i such that files[i]->largest >= key.
+// 返回最小的 index `i`, i 应满足 files[i]->largest >= key
 // Return files.size() if there is no such file.
 // REQUIRES: "files" contains a sorted list of non-overlapping files.
 int FindFile(const InternalKeyComparator& icmp,

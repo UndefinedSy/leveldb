@@ -179,16 +179,24 @@ inline int InternalKeyComparator::Compare(const InternalKey& a,
   return Compare(a.Encode(), b.Encode());
 }
 
-inline bool ParseInternalKey(const Slice& internal_key,
-                             ParsedInternalKey* result) {
-  const size_t n = internal_key.size();
-  if (n < 8) return false;
-  uint64_t num = DecodeFixed64(internal_key.data() + n - 8);
-  uint8_t c = num & 0xff;
-  result->sequence = num >> 8;
-  result->type = static_cast<ValueType>(c);
-  result->user_key = Slice(internal_key.data(), n - 8);
-  return (c <= static_cast<uint8_t>(kTypeValue));
+/**
+ * 尝试解析 internal_key.
+ * @param internal_key[IN], 待解析 InternalKey
+ * @param result[OUT], 解析成功时会将解析后数据存到 result, 失败是该字段为未定义状态
+ * @return 成功时返回 true, 否则返回 false
+ */
+inline bool
+ParseInternalKey(const Slice& internal_key,
+                 ParsedInternalKey* result)
+{
+    const size_t n = internal_key.size();
+    if (n < 8) return false;
+    uint64_t num = DecodeFixed64(internal_key.data() + n - 8);
+    uint8_t c = num & 0xff;
+    result->sequence = num >> 8;
+    result->type = static_cast<ValueType>(c);
+    result->user_key = Slice(internal_key.data(), n - 8);
+    return (c <= static_cast<uint8_t>(kTypeValue));
 }
 
 // A helper class useful for DBImpl::Get(), 用于 Get() 的 Key
