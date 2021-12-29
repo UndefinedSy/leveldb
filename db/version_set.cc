@@ -112,55 +112,78 @@ int FindFile(const InternalKeyComparator& icmp,
 	return right;
 }
 
-static bool AfterFile(const Comparator* ucmp, const Slice* user_key,
-                      const FileMetaData* f) {
-  // null user_key occurs before all keys and is therefore never after *f
-  return (user_key != nullptr &&
-          ucmp->Compare(*user_key, f->largest.user_key()) > 0);
+// 若 user_key 存在, 且在 f 的 largest key 之后则返回 true; 否则返回 false
+static bool
+AfterFile(const Comparator* ucmp, const Slice* user_key, const FileMetaData* f)
+{
+    // null user_key occurs before all keys and is therefore never after *f
+    return (user_key != nullptr &&
+            ucmp->Compare(*user_key, f->largest.user_key()) > 0);
 }
 
-static bool BeforeFile(const Comparator* ucmp, const Slice* user_key,
-                       const FileMetaData* f) {
-  // null user_key occurs after all keys and is therefore never before *f
-  return (user_key != nullptr &&
-          ucmp->Compare(*user_key, f->smallest.user_key()) < 0);
+// 若 user_key 存在, 且在 f 的 smallest key 之前则返回 true; 否则返回 false
+static bool
+BeforeFile(const Comparator* ucmp, const Slice* user_key, const FileMetaData* f)
+{
+    // null user_key occurs after all keys and is therefore never before *f
+    return (user_key != nullptr &&
+            ucmp->Compare(*user_key, f->smallest.user_key()) < 0);
 }
 
+/**
+ * 判断 files[] 中是否存在某个文件, 其 user key range 与 [*smallest,*largest] 有重叠
+ * @param icmp[IN]
+ * @param disjoint_sorted_files[IN], 标识 files 中文件是否是有序且相互不重叠的
+ * @param files[IN]
+ * @param smallest_user_key[IN], user key range 的下界, nullptr 表示无穷小
+ * @param largest_user_key[IN], user key range 的上界, nullptr 表示无穷大
+ * @return 若找到存在 overlap 文件则返回 true
+ */
 bool SomeFileOverlapsRange(const InternalKeyComparator& icmp,
                            bool disjoint_sorted_files,
                            const std::vector<FileMetaData*>& files,
                            const Slice* smallest_user_key,
-                           const Slice* largest_user_key) {
-  const Comparator* ucmp = icmp.user_comparator();
-  if (!disjoint_sorted_files) {
-    // Need to check against all files
-    for (size_t i = 0; i < files.size(); i++) {
-      const FileMetaData* f = files[i];
-      if (AfterFile(ucmp, smallest_user_key, f) ||
-          BeforeFile(ucmp, largest_user_key, f)) {
-        // No overlap
-      } else {
-        return true;  // Overlap
-      }
+                           const Slice* largest_user_key)
+{
+    const Comparator* ucmp = icmp.user_comparator();
+
+    // files 非有序且互不重叠, 因此逐个遍历
+    if (!disjoint_sorted_files)
+    {
+        // Need to check against all files
+        for (size_t i = 0; i < files.size(); i++)
+        {
+            const FileMetaData* f = files[i];
+            if (AfterFile(ucmp, smallest_user_key, f)
+                || BeforeFile(ucmp, largest_user_key, f))
+            {
+                // No overlap
+            }
+            else
+            {
+                return true;  // Overlap
+            }
+        }
+        return false;
     }
-    return false;
-  }
 
-  // Binary search over file list
-  uint32_t index = 0;
-  if (smallest_user_key != nullptr) {
-    // Find the earliest possible internal key for smallest_user_key
-    InternalKey small_key(*smallest_user_key, kMaxSequenceNumber,
-                          kValueTypeForSeek);
-    index = FindFile(icmp, files, small_key.Encode());
-  }
+    /*-------------------------------------------------------------------------*/
+    // files 有序且互不重叠, 二分搜索 file list
+    uint32_t index = 0;
+    if (smallest_user_key != nullptr)
+    {
+        // Find the earliest possible internal key for smallest_user_key
+        // TODO: kMaxSequenceNumber 是否有什么深意
+        InternalKey small_key(*smallest_user_key, kMaxSequenceNumber, kValueTypeForSeek);
+        // 搜索第一个 largest key >= smallest user key 的 file 的 index
+        index = FindFile(icmp, files, small_key.Encode());
+    }
 
-  if (index >= files.size()) {
-    // beginning of range is after all files, so no overlap.
-    return false;
-  }
+    if (index >= files.size()) return false;
 
-  return !BeforeFile(ucmp, largest_user_key, files[index]);
+    // 找到第一个 largest >= smallest user key 的 file
+    // 再判断该 file 的 smallest 是否在 largest user key 之后, 即是否 user key range 完全在 file 之前
+    return !BeforeFile(ucmp, largest_user_key, files[index]);
 }
 
 // An internal iterator.
@@ -335,8 +358,8 @@ NewestFirst(FileMetaData* a, FileMetaData* b) {
 // 如果某次调用 func() 返回 false，则不再继续调用
 //
 // REQUIRES: user portion of internal_key == user_key.
-void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
-                                 bool (*func)(void*, int, FileMetaData*))
+void Version::ForEachOverlapping(Slice user_key, Slice internal_key,
+                                 void* arg, bool (*func)(void*, int, FileMetaData*))
 {
   	const Comparator* ucmp = vset_->icmp_.user_comparator();
 
@@ -395,6 +418,15 @@ void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
 	}
 }
 
+/**
+ * 根据 key 查找当前 Version 下对应的 value, 查找自 level-0 向下, 从新到旧的顺序遍历
+ * REQUIRES: lock is not held
+ * @param options[IN]
+ * @param k[IN], key to lookup
+ * @param value[OUT], k 对应的 value 会存入到 *val
+ * @param stats[OUT], 当本次 Get 中 Seek 了多于 1 个 file 时, 记录 Seek 的第一个 file 的信息
+ * @return 找到则返回 OK, 否则返回 non-OK
+ */
 Status Version::Get(const ReadOptions& options, const LookupKey& k,
                     std::string* value, GetStats* stats)
 {
@@ -407,6 +439,7 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
 		GetStats* stats;
 		const ReadOptions* options;
 		Slice ikey;
+        // 上一次 Match() 的 file 的信息
 		FileMetaData* last_file_read;
 		int last_file_read_level;
 
@@ -422,6 +455,7 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
 			if (state->stats->seek_file == nullptr
 				&& state->last_file_read != nullptr)
 			{
+                // 这里表示本次 Get 中 Seek 了不止一个 file
 				// We have had more than one seek for this read.  Charge the 1st file.
 				state->stats->seek_file = state->last_file_read;
 				state->stats->seek_file_level = state->last_file_read_level;
@@ -430,12 +464,13 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
 			state->last_file_read = f;
 			state->last_file_read_level = level;
 
-			state->s = state->vset->table_cache_->Get(*state->options, f->number,
-													  f->file_size, state->ikey,
+			state->s = state->vset->table_cache_->Get(*state->options,
+                                                      f->number, f->file_size,
+                                                      state->ikey,
 													  &state->saver, SaveValue);
 			if (!state->s.ok())
 			{
-				state->found = true;
+				state->found = true;    // ?
 				return false;
 			}
 			
@@ -451,7 +486,7 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
 				case kCorrupt:
 					state->s =
 						Status::Corruption("corrupted key for ", state->saver.user_key);
-					state->found = true;
+					state->found = true;    // ?
 					return false;
 			}
 
@@ -481,17 +516,26 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
 	return state.found ? state.s : Status::NotFound(Slice());
 }
 
+/**
+ * 如果对一个 key range 的 Version::Get() 需要 Seek 多个 file
+ * 对所 Seek 的第一个 file(newest?) 记数, 记数超过阈值时将该 file 标记为 file to compact
+ * @return 当更新了本次 stat 中标记文件的 allowed seeks 记数后认为该 file 可以 compact 则返回 true
+ *         否则返回 false
+ */
 bool Version::UpdateStats(const GetStats& stats) {
-  FileMetaData* f = stats.seek_file;
-  if (f != nullptr) {
-    f->allowed_seeks--;
-    if (f->allowed_seeks <= 0 && file_to_compact_ == nullptr) {
-      file_to_compact_ = f;
-      file_to_compact_level_ = stats.seek_file_level;
-      return true;
+    FileMetaData* f = stats.seek_file;
+    if (f != nullptr)
+    {
+        f->allowed_seeks--;
+        
+        if (f->allowed_seeks <= 0 && file_to_compact_ == nullptr)
+        {
+            file_to_compact_ = f;
+            file_to_compact_level_ = stats.seek_file_level;
+            return true;
+        }
     }
-  }
-  return false;
+    return false;
 }
 
 bool Version::RecordReadSample(Slice internal_key) {
@@ -534,19 +578,19 @@ bool Version::RecordReadSample(Slice internal_key) {
 
 void Version::Ref() { ++refs_; }
 
-void Version::Unref() {
-  assert(this != &vset_->dummy_versions_);
-  assert(refs_ >= 1);
-  --refs_;
-  if (refs_ == 0) {
-    delete this;
-  }
+void Version::Unref()
+{
+    assert(this != &vset_->dummy_versions_);
+    assert(refs_ >= 1);
+    --refs_;
+    if (refs_ == 0) delete this;
 }
 
-bool Version::OverlapInLevel(int level, const Slice* smallest_user_key,
-                             const Slice* largest_user_key) {
-  return SomeFileOverlapsRange(vset_->icmp_, (level > 0), files_[level],
-                               smallest_user_key, largest_user_key);
+bool Version::OverlapInLevel(int level,
+                             const Slice* smallest_user_key,
+                             const Slice* largest_user_key)
+{
+    return SomeFileOverlapsRange(vset_->icmp_, (level > 0), files_[level], smallest_user_key, largest_user_key);
 }
 
 int Version::PickLevelForMemTableOutput(const Slice& smallest_user_key,
@@ -576,47 +620,78 @@ int Version::PickLevelForMemTableOutput(const Slice& smallest_user_key,
   return level;
 }
 
-// Store in "*inputs" all files in "level" that overlap [begin,end]
-void Version::GetOverlappingInputs(int level, const InternalKey* begin,
+
+/**
+ * 遍历一个 level, 将所有与传入 key range 存在 overlap 的文件存入 inputs
+ * 
+ * 需要注意的是, 如果是在 level-0, 因为不同文件之间可能相互重叠
+ * 因此发现一个文件 overlap 时会将 key range 更新为 [min(begin, file_smallest), max(end, file_largest)]
+ * 并重新搜索该 level
+ * @param level[IN]
+ * @param begin[IN]
+ * @param end[IN]
+ * @param inputs[OUT], 该 level 中对于一个 key range [begin, end] 认为存在 overlap 的 files
+ */
+void Version::GetOverlappingInputs(int level,
+                                   const InternalKey* begin,
                                    const InternalKey* end,
-                                   std::vector<FileMetaData*>* inputs) {
-  assert(level >= 0);
-  assert(level < config::kNumLevels);
-  inputs->clear();
-  Slice user_begin, user_end;
-  if (begin != nullptr) {
-    user_begin = begin->user_key();
-  }
-  if (end != nullptr) {
-    user_end = end->user_key();
-  }
-  const Comparator* user_cmp = vset_->icmp_.user_comparator();
-  for (size_t i = 0; i < files_[level].size();) {
-    FileMetaData* f = files_[level][i++];
-    const Slice file_start = f->smallest.user_key();
-    const Slice file_limit = f->largest.user_key();
-    if (begin != nullptr && user_cmp->Compare(file_limit, user_begin) < 0) {
-      // "f" is completely before specified range; skip it
-    } else if (end != nullptr && user_cmp->Compare(file_start, user_end) > 0) {
-      // "f" is completely after specified range; skip it
-    } else {
-      inputs->push_back(f);
-      if (level == 0) {
-        // Level-0 files may overlap each other.  So check if the newly
-        // added file has expanded the range.  If so, restart search.
-        if (begin != nullptr && user_cmp->Compare(file_start, user_begin) < 0) {
-          user_begin = file_start;
-          inputs->clear();
-          i = 0;
-        } else if (end != nullptr &&
-                   user_cmp->Compare(file_limit, user_end) > 0) {
-          user_end = file_limit;
-          inputs->clear();
-          i = 0;
+                                   std::vector<FileMetaData*>* inputs)
+{
+    assert(level >= 0);
+    assert(level < config::kNumLevels);
+
+    inputs->clear();
+    Slice user_begin, user_end;
+    if (begin != nullptr) user_begin = begin->user_key();
+    if (end != nullptr) user_end = end->user_key();
+    const Comparator* user_cmp = vset_->icmp_.user_comparator();
+
+    // 按序遍历该 level 中的所有 files
+    for (size_t i = 0; i < files_[level].size();)
+    {
+        FileMetaData* f = files_[level][i++];
+        const Slice file_start = f->smallest.user_key();
+        const Slice file_limit = f->largest.user_key();
+
+        // 有 begin, 且当前 file 的 largest < begin
+        if (begin != nullptr && user_cmp->Compare(file_limit, user_begin) < 0)
+        {
+            // "f" is completely before specified range; skip it
         }
-      }
+        // 有 end, 且当前 file 的 smallest > end
+        else if (end != nullptr && user_cmp->Compare(file_start, user_end) > 0)
+        {
+            // "f" is completely after specified range; skip it
+        }
+        // 当前 file 与期望的 key range 存在 overlap
+        else
+        {
+            inputs->push_back(f);
+
+            // Level-0 files 可能相互重叠, 因此要检查新增加的文件是否扩大了 range
+            // 即指定了上/下界的情况, 且当前的 key range 落在一个 level 0 的 key range
+            // 此时会将 key range 的上/下界置为该 level-0 的 上/下界, 然后重新搜索
+            if (level == 0)
+            {
+                // Level-0 files may overlap each other.  So check if the newly
+                // added file has expanded the range.  If so, restart search.
+                // 有 begin, 且该 level-0 file 的 smallest < begin
+                if (begin != nullptr && user_cmp->Compare(file_start, user_begin) < 0)
+                {
+                    user_begin = file_start;
+                    inputs->clear();
+                    i = 0;
+                }
+                // 有 end, 且当前 file 的 largest > end
+                else if (end != nullptr && user_cmp->Compare(file_limit, user_end) > 0)
+                {
+                    user_end = file_limit;
+                    inputs->clear();
+                    i = 0;
+                }
+            }
+        }
     }
-  }
 }
 
 std::string Version::DebugString() const {

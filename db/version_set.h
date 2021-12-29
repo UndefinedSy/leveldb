@@ -44,12 +44,12 @@ class WritableFile;
 int FindFile(const InternalKeyComparator& icmp,
              const std::vector<FileMetaData*>& files, const Slice& key);
 
-// Returns true iff some file in "files" overlaps the user key range
-// [*smallest,*largest].
-// smallest==nullptr represents a key smaller than all keys in the DB.
-// largest==nullptr represents a key largest than all keys in the DB.
-// REQUIRES: If disjoint_sorted_files, files[] contains disjoint ranges
-//           in sorted order.
+
+// 如果 files 中存在某个文件, 其 user key range 与 [*smallest,*largest] 有重叠，则返回true。
+// - smallest == nullptr 表示无穷小
+// - largest == nullptr 表示无穷大
+// 
+// REQUIRES: disjoint_sorted_files 为 true 表示 files[] 中是有序的相互不重叠的 key range
 bool SomeFileOverlapsRange(const InternalKeyComparator& icmp,
                            bool disjoint_sorted_files,
                            const std::vector<FileMetaData*>& files,
