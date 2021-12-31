@@ -175,81 +175,81 @@ private:
 	int compaction_level_;
 };
 
-class VersionSet {
+class VersionSet
+{
 public:
-  VersionSet(const std::string& dbname, const Options* options,
-             TableCache* table_cache, const InternalKeyComparator*);
-  VersionSet(const VersionSet&) = delete;
-  VersionSet& operator=(const VersionSet&) = delete;
+    VersionSet(const std::string& dbname, const Options* options,
+               TableCache* table_cache, const InternalKeyComparator*);
+    VersionSet(const VersionSet&) = delete;
+    VersionSet& operator=(const VersionSet&) = delete;
 
-  ~VersionSet();
+    ~VersionSet();
 
-  // Apply *edit to the current version to form a new descriptor that
-  // is both saved to persistent state and installed as the new
-  // current version.  Will release *mu while actually writing to the file.
-  // REQUIRES: *mu is held on entry.
-  // REQUIRES: no other thread concurrently calls LogAndApply()
-  Status LogAndApply(VersionEdit* edit, port::Mutex* mu)
-      EXCLUSIVE_LOCKS_REQUIRED(mu);
+    // 将 *edit 应用于 current version，生成一个新的描述符
+    // 该描述符既被保存到持久化状态，又被 install 为新的 current version
+    // 在实际写入文件时将释放 *mu
+    // REQUIRES: *mu is held on entry.
+    // REQUIRES: no other thread concurrently calls LogAndApply()
+    Status LogAndApply(VersionEdit* edit, port::Mutex* mu) EXCLUSIVE_LOCKS_REQUIRED(mu);
 
-  // Recover the last saved descriptor from persistent storage.
-  Status Recover(bool* save_manifest);
+    // Recover the last saved descriptor from persistent storage.
+    Status Recover(bool* save_manifest);
 
-  // Return the current version.
-  Version* current() const { return current_; }
+    // Return the current version.
+    Version* current() const { return current_; }
 
-  // Return the current manifest file number
-  uint64_t ManifestFileNumber() const { return manifest_file_number_; }
+    // Return the current manifest file number
+    uint64_t ManifestFileNumber() const { return manifest_file_number_; }
 
-  // Allocate and return a new file number
-  uint64_t NewFileNumber() { return next_file_number_++; }
+    // Allocate and return a new file number
+    uint64_t NewFileNumber() { return next_file_number_++; }
 
-  // Arrange to reuse "file_number" unless a newer file number has
-  // already been allocated.
-  // REQUIRES: "file_number" was returned by a call to NewFileNumber().
-  void ReuseFileNumber(uint64_t file_number) {
-    if (next_file_number_ == file_number + 1) {
-      next_file_number_ = file_number;
+    // 安排重复使用 file_number，除非已经又分配了一个更新的 file num
+    // REQUIRES: "file_number" was returned by a call to NewFileNumber().
+    void ReuseFileNumber(uint64_t file_number)
+    {
+        if (next_file_number_ == file_number + 1)
+            next_file_number_ = file_number;
     }
-  }
 
-  // Return the number of Table files at the specified level.
-  int NumLevelFiles(int level) const;
+    // Return the number of Table files at the specified level.
+    int NumLevelFiles(int level) const;
 
-  // Return the combined file size of all files at the specified level.
-  int64_t NumLevelBytes(int level) const;
+    // Return the combined file size of all files at the specified level.
+    int64_t NumLevelBytes(int level) const;
 
-  // Return the last sequence number.
-  uint64_t LastSequence() const { return last_sequence_; }
+    // Return the last sequence number.
+    uint64_t LastSequence() const { return last_sequence_; }
 
-  // Set the last sequence number to s.
-  void SetLastSequence(uint64_t s) {
-    assert(s >= last_sequence_);
-    last_sequence_ = s;
-  }
+    // Set the last sequence number to s.
+    void SetLastSequence(uint64_t s)
+    {
+        assert(s >= last_sequence_);
+        last_sequence_ = s;
+    }
 
-  // Mark the specified file number as used.
-  void MarkFileNumberUsed(uint64_t number);
+    // Mark the specified file number as used.
+    void MarkFileNumberUsed(uint64_t number);
 
-  // Return the current log file number.
-  uint64_t LogNumber() const { return log_number_; }
+    // Return the current log file number.
+    uint64_t LogNumber() const { return log_number_; }
 
-  // Return the log file number for the log file that is currently
-  // being compacted, or zero if there is no such log file.
-  uint64_t PrevLogNumber() const { return prev_log_number_; }
+    // 返回当前正在被 compacted 的 log file 的 file num.
+    // 如果没有这样的 file 则返回 0
+    uint64_t PrevLogNumber() const { return prev_log_number_; }
 
-  // Pick level and inputs for a new compaction.
-  // Returns nullptr if there is no compaction to be done.
-  // Otherwise returns a pointer to a heap-allocated object that
-  // describes the compaction.  Caller should delete the result.
-  Compaction* PickCompaction();
+    // 为一次新的 compaction 挑选 level 和 inputs
+    // 如果不需要做 compaction 则返回 nullptr
+    // 否则返回一个堆上的 *Compaction 对象指针. 调用者需要析构这个对象
+    Compaction* PickCompaction();
 
-  // Return a compaction object for compacting the range [begin,end] in
-  // the specified level.  Returns nullptr if there is nothing in that
-  // level that overlaps the specified range.  Caller should delete
-  // the result.
-  Compaction* CompactRange(int level, const InternalKey* begin,
-                           const InternalKey* end);
+    // Return a compaction object for compacting the range [begin,end] in
+    // the specified level.  Returns nullptr if there is nothing in that
+    // level that overlaps the specified range.  Caller should delete
+    // the result.
+    // 返回一个 compaction 对象，用于压实指定级别中的[begin,end]范围。 如果该层中没有任何东西与指定范围重叠，则返回nullptr。 调用者应删除该结果。
+    Compaction* CompactRange(int level,
+                             const InternalKey* begin, const InternalKey* end);
 
   // Return the maximum overlapping data (in bytes) at next level for any
   // file at a level >= 1.
