@@ -33,12 +33,12 @@ static const int kL0_SlowdownWritesTrigger = 8;
 // Maximum number of level-0 files.  We stop writes at this point.
 static const int kL0_StopWritesTrigger = 12;
 
-// Maximum level to which a new compacted memtable is pushed if it
-// does not create overlap.  We try to push to level 2 to avoid the
-// relatively expensive level 0=>1 compactions and to avoid some
-// expensive manifest file operations.  We do not push all the way to
-// the largest level since that can generate a lot of wasted disk
-// space if the same key space is being repeatedly overwritten.
+// 如果一个 newly compacted memtable 没有与已有文件产生 overlap,
+// 则该 newly compacted memtable 应被 push 到的 max level.
+// 我们会将其 push 到 level-2, 以避免相对昂贵的 level 0=>1 compactions,
+// 并避免一些昂贵的 MANIFEST file operations.
+// 这里不会选择 push 到 largest level, 因为如果同一个 key space 被反复地覆盖(overwritten)，
+// 则这样会产生大量被浪费的磁盘空间.
 static const int kMaxMemCompactLevel = 2;
 
 // Approximate gap in bytes between samples of data read during iteration.

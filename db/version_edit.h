@@ -121,9 +121,12 @@ private:
 	bool has_next_file_number_;
 	bool has_last_sequence_;
 
-	std::vector<std::pair<int, InternalKey>> compact_pointers_;	// 各 level 的 compact 点
-	DeletedFileSet deleted_files_;							// deleted files
-	std::vector<std::pair<int, FileMetaData>> new_files_;	// added files
+	// 各 level 的 compact 点
+	std::vector<std::pair<int, InternalKey>> compact_pointers_;
+	// deleted files <level, file_num>, 相对 base Version 删除的 files
+	DeletedFileSet deleted_files_;
+	// added files <level, FileMetaData>, 相对 base Version 增加的 files
+	std::vector<std::pair<int, FileMetaData>> new_files_;
 };
 
 }  // namespace leveldb

@@ -506,60 +506,73 @@ Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
   return status;
 }
 
-Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
-                                Version* base) {
-  mutex_.AssertHeld();
-  const uint64_t start_micros = env_->NowMicros();
-  FileMetaData meta;
-  meta.number = versions_->NewFileNumber();
-  pending_outputs_.insert(meta.number);
-  Iterator* iter = mem->NewIterator();
-  Log(options_.info_log, "Level-0 table #%llu: started",
-      (unsigned long long)meta.number);
+/**
+ * 
+ * @param mem[IN], 
+ * @param edit[OUT], 
+ * @param base[IN], current version
+ */
+Status
+DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit, Version* base)
+{
+  	mutex_.AssertHeld();
 
-  Status s;
-  {
-    mutex_.Unlock();
-    s = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta);
-    mutex_.Lock();
-  }
+	const uint64_t start_micros = env_->NowMicros();
+	FileMetaData meta;
+	meta.number = versions_->NewFileNumber();	// prepare filenum for new table file
+  	pending_outputs_.insert(meta.number);
+	Iterator* iter = mem->NewIterator();
+	Log(options_.info_log, "Level-0 table #%llu: started",
+						   (unsigned long long)meta.number);
 
-  Log(options_.info_log, "Level-0 table #%llu: %lld bytes %s",
-      (unsigned long long)meta.number, (unsigned long long)meta.file_size,
-      s.ToString().c_str());
-  delete iter;
-  pending_outputs_.erase(meta.number);
+	// 尝试生成 table file, 该操作被 mutex_ 保护
+	Status s;
+	{
+		mutex_.Unlock();
+		s = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta);
+		mutex_.Lock();
+	}
+	Log(options_.info_log, "Level-0 table #%llu: %lld bytes %s",
+							(unsigned long long)meta.number,
+							(unsigned long long)meta.file_size,
+							s.ToString().c_str());
+  	delete iter;
+  	pending_outputs_.erase(meta.number);
 
-  // Note that if file_size is zero, the file has been deleted and
-  // should not be added to the manifest.
-  int level = 0;
-  if (s.ok() && meta.file_size > 0) {
-    const Slice min_user_key = meta.smallest.user_key();
-    const Slice max_user_key = meta.largest.user_key();
-    if (base != nullptr) {
-      level = base->PickLevelForMemTableOutput(min_user_key, max_user_key);
-    }
-    edit->AddFile(level, meta.number, meta.file_size, meta.smallest,
-                  meta.largest);
-  }
+	// 如果 file_size 为 0, 则将不会生成 table file(file 已经被删除？)
+	// 因此不应该将该 file 添加到 MANIFEST
+  	int level = 0;
+  	if (s.ok() && meta.file_size > 0)	// 生成了 table file
+	{
+		const Slice min_user_key = meta.smallest.user_key();
+		const Slice max_user_key = meta.largest.user_key();
+		if (base != nullptr)
+		{
+			level = base->PickLevelForMemTableOutput(min_user_key, max_user_key);
+		}
+		edit->AddFile(level, meta.number, meta.file_size, meta.smallest, meta.largest);
+	}
 
-  CompactionStats stats;
-  stats.micros = env_->NowMicros() - start_micros;
-  stats.bytes_written = meta.file_size;
-  stats_[level].Add(stats);
-  return s;
+	// 关于本次 compaction 的统计信息
+	CompactionStats stats;
+	stats.micros = env_->NowMicros() - start_micros;
+	stats.bytes_written = meta.file_size;
+	stats_[level].Add(stats);
+	return s;
 }
 
-void DBImpl::CompactMemTable() {
-  mutex_.AssertHeld();
-  assert(imm_ != nullptr);
+// Minor Compaction, 将 Memtable dump 为 SST
+void DBImpl::CompactMemTable()
+{
+	mutex_.AssertHeld();
+	assert(imm_ != nullptr);
 
-  // Save the contents of the memtable as a new Table
-  VersionEdit edit;
-  Version* base = versions_->current();
-  base->Ref();
-  Status s = WriteLevel0Table(imm_, &edit, base);
-  base->Unref();
+	// Save the contents of the memtable as a new Table
+	VersionEdit edit;
+	Version* base = versions_->current();
+	base->Ref();
+	Status s = WriteLevel0Table(imm_, &edit, base);
+	base->Unref();
 
   if (s.ok() && shutting_down_.load(std::memory_order_acquire)) {
     s = Status::IOError("Deleting DB during memtable compaction");
@@ -663,21 +676,33 @@ void DBImpl::RecordBackgroundError(const Status& s) {
   }
 }
 
-void DBImpl::MaybeScheduleCompaction() {
-  mutex_.AssertHeld();
-  if (background_compaction_scheduled_) {
-    // Already scheduled
-  } else if (shutting_down_.load(std::memory_order_acquire)) {
-    // DB is being deleted; no more background compactions
-  } else if (!bg_error_.ok()) {
-    // Already got an error; no more changes
-  } else if (imm_ == nullptr && manual_compaction_ == nullptr &&
-             !versions_->NeedsCompaction()) {
-    // No work to be done
-  } else {
-    background_compaction_scheduled_ = true;
-    env_->Schedule(&DBImpl::BGWork, this);
-  }
+void DBImpl::MaybeScheduleCompaction()
+{
+	mutex_.AssertHeld();
+  
+  	if (background_compaction_scheduled_)
+	{
+    	// Already scheduled
+  	}
+	else if (shutting_down_.load(std::memory_order_acquire))
+	{
+    	// DB is being deleted; no more background compactions
+  	}
+	else if (!bg_error_.ok())
+	{
+    	// Already got an error; no more changes
+	}
+	else if (imm_ == nullptr	// 没有 Immutable MemTable 需要 dump 成 SST
+			 && manual_compaction_ == nullptr	// 非通过 DBImpl::CompactRange 人工触发
+             && !versions_->NeedsCompaction())	// 判断不需要进一步发起 Compaction
+	{
+    	// No work to be done
+  	}
+	else
+	{
+		background_compaction_scheduled_ = true;
+		env_->Schedule(&DBImpl::BGWork, this);
+	}
 }
 
 void DBImpl::BGWork(void* db) {

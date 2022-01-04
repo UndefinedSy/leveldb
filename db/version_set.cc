@@ -594,30 +594,42 @@ bool Version::OverlapInLevel(int level,
 }
 
 int Version::PickLevelForMemTableOutput(const Slice& smallest_user_key,
-                                        const Slice& largest_user_key) {
-  int level = 0;
-  if (!OverlapInLevel(0, &smallest_user_key, &largest_user_key)) {
-    // Push to next level if there is no overlap in next level,
-    // and the #bytes overlapping in the level after that are limited.
-    InternalKey start(smallest_user_key, kMaxSequenceNumber, kValueTypeForSeek);
-    InternalKey limit(largest_user_key, 0, static_cast<ValueType>(0));
-    std::vector<FileMetaData*> overlaps;
-    while (level < config::kMaxMemCompactLevel) {
-      if (OverlapInLevel(level + 1, &smallest_user_key, &largest_user_key)) {
-        break;
-      }
-      if (level + 2 < config::kNumLevels) {
-        // Check that file does not overlap too many grandparent bytes.
-        GetOverlappingInputs(level + 2, &start, &limit, &overlaps);
-        const int64_t sum = TotalFileSize(overlaps);
-        if (sum > MaxGrandParentOverlapBytes(vset_->options_)) {
-          break;
-        }
-      }
-      level++;
-    }
-  }
-  return level;
+                                        const Slice& largest_user_key)
+{
+  	int level = 0;
+  	if (!OverlapInLevel(0, &smallest_user_key, &largest_user_key))
+	{
+		InternalKey start(smallest_user_key, kMaxSequenceNumber, kValueTypeForSeek);
+		InternalKey limit(largest_user_key, 0, static_cast<ValueType>(0));
+		std::vector<FileMetaData*> overlaps;
+
+		// 如果 level+1 中不存在 overlap 且 level+2 中 overlapping 的 #bytes 有限
+		// 则将检查的 level 向下推进一层
+		while (level < config::kMaxMemCompactLevel)	// MAX 2
+		{
+			if (OverlapInLevel(level + 1, &smallest_user_key, &largest_user_key))
+			{
+				// 若发现在某一个 level 的 next level 中存在 overlap 则退出并返回
+				break;
+			}
+
+			if (level + 2 < config::kNumLevels)
+			{
+				// 对于一个 level, 若 level+1 中不存在 overlap
+				// 则尝试检查 level+2 中是否存在 overlap
+				GetOverlappingInputs(level + 2, &start, &limit, &overlaps);
+
+				// Check that file does not overlap too many grandparent bytes.
+				const int64_t sum = TotalFileSize(overlaps);
+				if (sum > MaxGrandParentOverlapBytes(vset_->options_))
+				{
+					break;
+				}
+			}
+			level++;
+		}
+	}
+  	return level;
 }
 
 
@@ -800,7 +812,7 @@ public:
     // Apply all of the edits in *edit to the current state.
     void Apply(VersionEdit* edit)
     {
-        // Update compaction pointers
+        // Update compaction pointers (各 level 下次 compaction 的 start key)
         for (size_t i = 0; i < edit->compact_pointers_.size(); i++)
         {
             const int level = edit->compact_pointers_[i].first;
@@ -823,19 +835,17 @@ public:
             FileMetaData* f = new FileMetaData(edit->new_files_[i].second);
             f->refs = 1;
 
-            // We arrange to automatically compact this file after
-            // a certain number of seeks.  Let's assume:
-            //   (1) One seek costs 10ms
-            //   (2) Writing or reading 1MB costs 10ms (100MB/s)
-            //   (3) A compaction of 1MB does 25MB of IO:
-            //         1MB read from this level
-            //         10-12MB read from next level (boundaries may be misaligned)
-            //         10-12MB written to next level
-            // This implies that 25 seeks cost the same as the compaction
-            // of 1MB of data.  I.e., one seek costs approximately the
-            // same as the compaction of 40KB of data.  We are a little
-            // conservative and allow approximately one seek for every 16KB
-            // of data before triggering a compaction.
+			// 我们会在一定次数的 seeks 后自动 compact 一个文件. 假设:
+			//   (1) 一次 Seek 花费了 10ms
+            //   (2) 读/写一个 1MB 的数据花费了 10ms (100MB/s)
+			//   (3) 一次 1MB 的 Compaction 会产生 25MB 的 IO:
+			// 		- 该 level 的读: 1MB 
+			// 		- next level 的读: 10-12MB (boundaries 可能没有对齐)
+			// 		- 向 next leve 的写: 10-12MB
+			// 这意味着对于 1MB 数据的 Compaction 会有 25 次 Seeks 的开销
+			// 也就是说，每 Compact 40KB 的数据就等价于一次 Seek 的成本
+			// 保守估计来说, 我们允许在触发一次 Compaction 前, 每 16KB 的数据可以有一次 Seek
+
             f->allowed_seeks = static_cast<int>((f->file_size / 16384U));
             if (f->allowed_seeks < 100) f->allowed_seeks = 100;
 
@@ -923,20 +933,20 @@ public:
 VersionSet::VersionSet(const std::string& dbname, const Options* options,
                        TableCache* table_cache,
                        const InternalKeyComparator* cmp)
-    : env_(options->env),
-      dbname_(dbname),
-      options_(options),
-      table_cache_(table_cache),
-      icmp_(*cmp),
-      next_file_number_(2),
-      manifest_file_number_(0),  // Filled by Recover()
-      last_sequence_(0),
-      log_number_(0),
-      prev_log_number_(0),
-      descriptor_file_(nullptr),
-      descriptor_log_(nullptr),
-      dummy_versions_(this),
-      current_(nullptr) {
+    : env_(options->env)
+    , dbname_(dbname)
+    , options_(options)
+    , table_cache_(table_cache)
+    , icmp_(*cmp)
+    , next_file_number_(2)
+    , manifest_file_number_(0)  // Filled by Recover()
+    , last_sequence_(0)
+    , log_number_(0)
+    , prev_log_number_(0)
+    , descriptor_file_(nullptr)
+    , descriptor_log_(nullptr)
+    , dummy_versions_(this)
+    , current_(nullptr) {
   AppendVersion(new Version(this));
 }
 
