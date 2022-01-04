@@ -251,34 +251,34 @@ public:
     Compaction* CompactRange(int level,
                              const InternalKey* begin, const InternalKey* end);
 
-  // Return the maximum overlapping data (in bytes) at next level for any
-  // file at a level >= 1.
-  int64_t MaxNextLevelOverlappingBytes();
+    // 对于任一个 level >= 1 的 file, 返回 next level 中与其存在 overlapping 的最大字节数
+    int64_t MaxNextLevelOverlappingBytes();
 
-  // Create an iterator that reads over the compaction inputs for "*c".
-  // The caller should delete the iterator when no longer needed.
-  Iterator* MakeInputIterator(Compaction* c);
+    // Create an iterator that reads over the compaction inputs for "*c".
+    // The caller should delete the iterator when no longer needed.
+    // 创建一个迭代器，读取 "*c "的压实输入。当不再需要时，调用者应该删除这个迭代器。
+    Iterator* MakeInputIterator(Compaction* c);
 
-  // Returns true iff some level needs a compaction.
-  bool NeedsCompaction() const {
-    Version* v = current_;
-    return (v->compaction_score_ >= 1) || (v->file_to_compact_ != nullptr);
-  }
+    // 如果有 level 需要 compaction 则返回 true
+    bool NeedsCompaction() const
+    {
+        Version* v = current_;
+        return (v->compaction_score_ >= 1) || (v->file_to_compact_ != nullptr);
+    }
 
-  // Add all files listed in any live version to *live.
-  // May also mutate some internal state.
-  void AddLiveFiles(std::set<uint64_t>* live);
+    // 将任何 live version 中列出的所有 files 添加到 *live 中
+    // 可能会改变一些 internal state
+    void AddLiveFiles(std::set<uint64_t>* live);
 
-  // Return the approximate offset in the database of the data for
-  // "key" as of version "v".
-  uint64_t ApproximateOffsetOf(Version* v, const InternalKey& key);
+    // 返回对于 Version `v` 的数据 `key` 在数据库中的近似的 offset。
+    uint64_t ApproximateOffsetOf(Version* v, const InternalKey& key);
 
-  // Return a human-readable short (single-line) summary of the number
-  // of files per level.  Uses *scratch as backing store.
-  struct LevelSummaryStorage {
-    char buffer[100];
-  };
-  const char* LevelSummary(LevelSummaryStorage* scratch) const;
+    // 返回一个 human-readable 的简短 (single-line) 摘要，即每个 level 中的文件数量
+    // 使用 *scratch 作为存储
+    struct LevelSummaryStorage {
+        char buffer[100];
+    };
+    const char* LevelSummary(LevelSummaryStorage* scratch) const;
 
 private:
 	class Builder;
