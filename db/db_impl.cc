@@ -507,9 +507,10 @@ Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
 }
 
 /**
- * 
+ * 将 memtable 写到一个 table file(<dbname>/<number>.ldb)
+ * 若生成了一个有效的 table file, 会将该文件的 FileMetaData 添加到 VersionEdit
  * @param mem[IN], 
- * @param edit[OUT], 
+ * @param edit[OUT], 若生成了 table file, 则会向 *edit 中 AddFile
  * @param base[IN], current version
  */
 Status
@@ -548,6 +549,8 @@ DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit, Version* base)
 		const Slice max_user_key = meta.largest.user_key();
 		if (base != nullptr)
 		{
+            // level 表示生成的 table file 应该落到哪一层
+            // 若不存在 overlap 则默认为在 level-0
 			level = base->PickLevelForMemTableOutput(min_user_key, max_user_key);
 		}
 		edit->AddFile(level, meta.number, meta.file_size, meta.smallest, meta.largest);
@@ -574,9 +577,10 @@ void DBImpl::CompactMemTable()
 	Status s = WriteLevel0Table(imm_, &edit, base);
 	base->Unref();
 
-  if (s.ok() && shutting_down_.load(std::memory_order_acquire)) {
-    s = Status::IOError("Deleting DB during memtable compaction");
-  }
+    if (s.ok() && shutting_down_.load(std::memory_order_acquire))
+    {
+        s = Status::IOError("Deleting DB during memtable compaction");
+    }
 
   // Replace immutable memtable with the generated Table
   if (s.ok()) {
