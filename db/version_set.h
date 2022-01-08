@@ -152,12 +152,13 @@ private:
 	void ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
 							bool (*func)(void*, int, FileMetaData*));
 
-	VersionSet* vset_;  // VersionSet to which this Version belongs
+    // 所有的 Versions 构成一个 Version Set, 其是一个 Version 为元素的双向链表
+	VersionSet* vset_;
 	Version* next_;     // Next version in linked list
 	Version* prev_;     // Previous version in linked list
 	int refs_;          // Number of live refs to this version
 
-	// 每层 level 的 sstable files
+	// 该 Version 下每层 level 中的 sstable files
 	std::vector<FileMetaData*> files_[config::kNumLevels];
 
 	// Next file to compact based on seek stats.
@@ -169,6 +170,7 @@ private:
 	// Score < 1 means compaction is not strictly needed.  These fields
 	// are initialized by Finalize().
 	// 接下来要被 compacted 的 level 和它的 compaction score
+    // 会根据 compaction score 判断是否需要进行 major compaction
 	// Score < 1 意味着并不是紧迫地需要进行 compaction
 	// 这些字段是在 Finalize() 时初始化
 	double compaction_score_;

@@ -38,17 +38,22 @@ static int64_t ExpandedCompactionByteSizeLimit(const Options* options) {
   return 25 * TargetFileSize(options);
 }
 
-static double MaxBytesForLevel(const Options* options, int level) {
-  // Note: the result for level zero is not really used since we set
-  // the level-0 compaction threshold based on number of files.
+// level-0 基于文件数
+// 其他 level 会根据 total file size
+// level-1 - 10M 之后每层 *10
+static double
+MaxBytesForLevel(const Options* options, int level) {
+    // Note: the result for level zero is not really used since we set
+    // the level-0 compaction threshold based on number of files.
 
-  // Result for both level-0 and level-1
-  double result = 10. * 1048576.0;
-  while (level > 1) {
-    result *= 10;
-    level--;
-  }
-  return result;
+    // Result for both level-0 and level-1
+    double result = 10. * 1048576.0;
+    while (level > 1)
+    {
+        result *= 10;
+        level--;
+    }
+    return result;
 }
 
 static uint64_t MaxFileSizeForLevel(const Options* options, int level) {
@@ -64,24 +69,26 @@ static int64_t TotalFileSize(const std::vector<FileMetaData*>& files) {
   return sum;
 }
 
-Version::~Version() {
-  assert(refs_ == 0);
+Version::~Version()
+{
+    assert(refs_ == 0);
 
-  // Remove from linked list
-  prev_->next_ = next_;
-  next_->prev_ = prev_;
+    // Remove from linked list
+    prev_->next_ = next_;
+    next_->prev_ = prev_;
 
-  // Drop references to files
-  for (int level = 0; level < config::kNumLevels; level++) {
-    for (size_t i = 0; i < files_[level].size(); i++) {
-      FileMetaData* f = files_[level][i];
-      assert(f->refs > 0);
-      f->refs--;
-      if (f->refs <= 0) {
-        delete f;
-      }
+    // Drop references to files
+    for (int level = 0; level < config::kNumLevels; level++)
+    {
+        for (size_t i = 0; i < files_[level].size(); i++)
+        {
+            FileMetaData* f = files_[level][i];
+            assert(f->refs > 0);
+
+            f->refs--;
+            if (f->refs <= 0) delete f;
+        }
     }
-  }
 }
 
 /**
@@ -854,23 +861,35 @@ public:
         }
     }
 
-    // Save the current state in *v.
+    /**
+     * 根据 current state 以及 Apply() 的 edit 生成新 Version 的 files_(即每层的 FileMetaData)
+     * 这个过程中会通过 MaybeAddFile 应用 VersionEdit 中 deleted files 和 added files
+     * @param v[OUT], 最初 v 是空的, 表示生成的新 Version
+     */
     void SaveTo(Version* v)
     {
         BySmallestKey cmp;
         cmp.internal_comparator = &vset_->icmp_;
+
+        // 逐层处理
         for (int level = 0; level < config::kNumLevels; level++)
         {
             // Merge the set of added files with the set of pre-existing files.
-            // Drop any deleted files.  Store the result in *v.
+            // Drop any deleted files.
+            // Store the result in *v.
+
+            // current base
             const std::vector<FileMetaData*>& base_files = base_->files_[level];
             std::vector<FileMetaData*>::const_iterator base_iter = base_files.begin();
             std::vector<FileMetaData*>::const_iterator base_end = base_files.end();
+
+            // versionEdit
             const FileSet* added_files = levels_[level].added_files;
             v->files_[level].reserve(base_files.size() + added_files->size());
+
             for (const auto& added_file : *added_files)
             {
-                // Add all smaller files listed in base_
+                // 对该 level 中 base 的所有 < added_file 的 FileMetaData 调用 MaybeAddFile
                 for (std::vector<FileMetaData*>::const_iterator bpos =
                         std::upper_bound(base_iter, base_end, added_file, cmp);
                     base_iter != bpos;
@@ -879,6 +898,7 @@ public:
                     MaybeAddFile(v, level, *base_iter);
                 }
 
+                // 然后对 added file 调用
                 MaybeAddFile(v, level, added_file);
             }
 
@@ -909,6 +929,7 @@ public:
         }
     }
 
+    // 对 MaybeAddFile 的调用是有序的
     void MaybeAddFile(Version* v, int level, FileMetaData* f)
     {
         if (levels_[level].deleted_files.count(f->number) > 0)
@@ -918,9 +939,10 @@ public:
         else
         {
             std::vector<FileMetaData*>* files = &v->files_[level];
+            // 对于非 level-0, 要求该 level 中不同文件之间不能存在 overlap
             if (level > 0 && !files->empty())
             {
-                // Must not overlap
+                // 对 MaybeAddFile 的调用是有序的, 因此判断前一个的最大值是否 < 新的最小值
                 assert(vset_->icmp_.Compare((*files)[files->size() - 1]->largest,
                                             f->smallest) < 0);
             }
@@ -974,89 +996,115 @@ void VersionSet::AppendVersion(Version* v) {
   v->next_->prev_ = v;
 }
 
-Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
-  if (edit->has_log_number_) {
-    assert(edit->log_number_ >= log_number_);
-    assert(edit->log_number_ < next_file_number_);
-  } else {
-    edit->SetLogNumber(log_number_);
-  }
+/**
+ * 将 *edit 应用于 current version，生成一个新的描述符
+ * 生成的新描述符既被保存到持久化状态，又被 install 为新的 current version
+ * 在实际写入文件时将释放 *mu
+ * REQUIRES: *mu is held on entry.
+ * REQUIRES: no other thread concurrently calls LogAndApply()
+ * 
+ * @param edit, current version 需要 apply 的变化
+ * @param mu
+ */
+Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu)
+{
+    // TODO: log number 是啥
+    if (edit->has_log_number_)
+    {
+        assert(edit->log_number_ >= log_number_);
+        assert(edit->log_number_ < next_file_number_);
+    }
+    else
+    {
+        edit->SetLogNumber(log_number_);
+    }
 
-  if (!edit->has_prev_log_number_) {
-    edit->SetPrevLogNumber(prev_log_number_);
-  }
+    if (!edit->has_prev_log_number_)
+    {
+        edit->SetPrevLogNumber(prev_log_number_);
+    }
 
-  edit->SetNextFile(next_file_number_);
-  edit->SetLastSequence(last_sequence_);
-
-  Version* v = new Version(this);
-  {
-    Builder builder(this, current_);
-    builder.Apply(edit);
-    builder.SaveTo(v);
-  }
-  Finalize(v);
-
-  // Initialize new descriptor log file if necessary by creating
-  // a temporary file that contains a snapshot of the current version.
-  std::string new_manifest_file;
-  Status s;
-  if (descriptor_log_ == nullptr) {
-    // No reason to unlock *mu here since we only hit this path in the
-    // first call to LogAndApply (when opening the database).
-    assert(descriptor_file_ == nullptr);
-    new_manifest_file = DescriptorFileName(dbname_, manifest_file_number_);
     edit->SetNextFile(next_file_number_);
-    s = env_->NewWritableFile(new_manifest_file, &descriptor_file_);
-    if (s.ok()) {
-      descriptor_log_ = new log::Writer(descriptor_file_);
-      s = WriteSnapshot(descriptor_log_);
-    }
-  }
+    edit->SetLastSequence(last_sequence_);
 
-  // Unlock during expensive MANIFEST log write
-  {
-    mu->Unlock();
+    Version* v = new Version(this);
 
-    // Write new record to MANIFEST log
-    if (s.ok()) {
-      std::string record;
-      edit->EncodeTo(&record);
-      s = descriptor_log_->AddRecord(record);
-      if (s.ok()) {
-        s = descriptor_file_->Sync();
-      }
-      if (!s.ok()) {
-        Log(options_->info_log, "MANIFEST write: %s\n", s.ToString().c_str());
-      }
+    {
+        Builder builder(this, current_);
+        builder.Apply(edit);
+        builder.SaveTo(v);
     }
 
-    // If we just created a new descriptor file, install it by writing a
-    // new CURRENT file that points to it.
-    if (s.ok() && !new_manifest_file.empty()) {
-      s = SetCurrentFile(env_, dbname_, manifest_file_number_);
+    Finalize(v);
+
+    // Initialize new descriptor log file if necessary by creating
+    // a temporary file that contains a snapshot of the current version.
+    std::string new_manifest_file;
+    Status s;
+    if (descriptor_log_ == nullptr)
+    {
+        // No reason to unlock *mu here since we only hit this path in the
+        // first call to LogAndApply (when opening the database).
+        assert(descriptor_file_ == nullptr);
+        new_manifest_file = DescriptorFileName(dbname_, manifest_file_number_);
+        edit->SetNextFile(next_file_number_);
+        s = env_->NewWritableFile(new_manifest_file, &descriptor_file_);
+        if (s.ok())
+        {
+            descriptor_log_ = new log::Writer(descriptor_file_);
+            s = WriteSnapshot(descriptor_log_);
+        }
     }
 
-    mu->Lock();
-  }
+    // Unlock during expensive MANIFEST log write
+    {
+        mu->Unlock();
 
-  // Install the new version
-  if (s.ok()) {
-    AppendVersion(v);
-    log_number_ = edit->log_number_;
-    prev_log_number_ = edit->prev_log_number_;
-  } else {
-    delete v;
-    if (!new_manifest_file.empty()) {
-      delete descriptor_log_;
-      delete descriptor_file_;
-      descriptor_log_ = nullptr;
-      descriptor_file_ = nullptr;
-      env_->RemoveFile(new_manifest_file);
+        // Write new record to MANIFEST log
+        if (s.ok())
+        {
+            std::string record;
+            edit->EncodeTo(&record);
+            s = descriptor_log_->AddRecord(record);
+            if (s.ok()) {
+                s = descriptor_file_->Sync();
+            }
+            if (!s.ok()) {
+                Log(options_->info_log, "MANIFEST write: %s\n", s.ToString().c_str());
+            }
+        }
+
+        // If we just created a new descriptor file, install it by writing a
+        // new CURRENT file that points to it.
+        if (s.ok() && !new_manifest_file.empty())
+        {
+            s = SetCurrentFile(env_, dbname_, manifest_file_number_);
+        }
+
+        mu->Lock();
     }
-  }
 
-  return s;
+    // Install the new version
+    if (s.ok())
+    {
+        AppendVersion(v);
+        log_number_ = edit->log_number_;
+        prev_log_number_ = edit->prev_log_number_;
+    }
+    else
+    {
+        delete v;
+        if (!new_manifest_file.empty())
+        {
+            delete descriptor_log_;
+            delete descriptor_file_;
+            descriptor_log_ = nullptr;
+            descriptor_file_ = nullptr;
+            env_->RemoveFile(new_manifest_file);
+        }
+    }
+
+    return s;
 }
 
 Status VersionSet::Recover(bool* save_manifest) {
@@ -1229,42 +1277,50 @@ void VersionSet::MarkFileNumberUsed(uint64_t number) {
   }
 }
 
-void VersionSet::Finalize(Version* v) {
-  // Precomputed best level for next compaction
-  int best_level = -1;
-  double best_score = -1;
+/**
+ * 逐层判断该 level 是否最需要进行 compaction
+ * - 对于 level-0 的判断标准是 file num
+ * - 对于其他 level 的判断标准是 total file size
+ * @param v[OUT], 最需要 compaction 的 level & score 会存入 v 的成员
+ */
+void VersionSet::Finalize(Version* v)
+{
+    // Precomputed best level for next compaction
+    int best_level = -1;
+    double best_score = -1;
 
-  for (int level = 0; level < config::kNumLevels - 1; level++) {
-    double score;
-    if (level == 0) {
-      // We treat level-0 specially by bounding the number of files
-      // instead of number of bytes for two reasons:
-      //
-      // (1) With larger write-buffer sizes, it is nice not to do too
-      // many level-0 compactions.
-      //
-      // (2) The files in level-0 are merged on every read and
-      // therefore we wish to avoid too many files when the individual
-      // file size is small (perhaps because of a small write-buffer
-      // setting, or very high compression ratios, or lots of
-      // overwrites/deletions).
-      score = v->files_[level].size() /
-              static_cast<double>(config::kL0_CompactionTrigger);
-    } else {
-      // Compute the ratio of current size to size limit.
-      const uint64_t level_bytes = TotalFileSize(v->files_[level]);
-      score =
-          static_cast<double>(level_bytes) / MaxBytesForLevel(options_, level);
+    for (int level = 0; level < config::kNumLevels - 1; level++)
+    {
+        double score;
+        if (level == 0)
+        {
+            // 对于 level-0 作特殊处理, 限定文件数而不是字节数. 有两个原因:
+            // 
+            // (1) 对于有较大的 write-buffer 情况下，最好不要做太多的 level-0 compactions
+            // 
+            // (2) 每次读操作都需要对 level-0 的文件做 merge
+            //     因此我们希望在单个文件大小较小的情况下避免存在过多的文件
+            //    （这也许是因为 write-buffer 设置较小，或者压缩率很高，或者有很多 overwrites/deletions）
+            score = v->files_[level].size() /
+                    static_cast<double>(config::kL0_CompactionTrigger);
+        }
+        else
+        {
+            // Compute the ratio of current size to size limit.
+            const uint64_t level_bytes = TotalFileSize(v->files_[level]);
+            score =
+                static_cast<double>(level_bytes) / MaxBytesForLevel(options_, level);
+        }
+
+        if (score > best_score)
+        {
+            best_level = level;
+            best_score = score;
+        }
     }
 
-    if (score > best_score) {
-      best_level = level;
-      best_score = score;
-    }
-  }
-
-  v->compaction_level_ = best_level;
-  v->compaction_score_ = best_score;
+    v->compaction_level_ = best_level;
+    v->compaction_score_ = best_score;
 }
 
 Status VersionSet::WriteSnapshot(log::Writer* log) {
