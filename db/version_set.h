@@ -161,18 +161,14 @@ private:
 	// 该 Version 下每层 level 中的 sstable files
 	std::vector<FileMetaData*> files_[config::kNumLevels];
 
-	// Next file to compact based on seek stats.
-	// 基于 seek stats 的下一个要 compact 的文件
+	// 基于 seek stats 所决定的下一次 compaction 的元信息
+    // 在 UpdateStats() 中更新
 	FileMetaData* file_to_compact_;
 	int file_to_compact_level_;
 
-	// Level that should be compacted next and its compaction score.
-	// Score < 1 means compaction is not strictly needed.  These fields
-	// are initialized by Finalize().
-	// 接下来要被 compacted 的 level 和它的 compaction score
-    // 会根据 compaction score 判断是否需要进行 major compaction
-	// Score < 1 意味着并不是紧迫地需要进行 compaction
-	// 这些字段是在 Finalize() 时初始化
+	// 接下来要被 compacted 的 level 和它的 compaction score, 用于判断是否需要进行 major compaction
+	// Score < 1 意味着不需要立刻进行 compaction
+	// 在 Finalize() 中初始化
 	double compaction_score_;
 	int compaction_level_;
 };
@@ -312,7 +308,8 @@ private:
 	TableCache* const table_cache_;
 	const InternalKeyComparator icmp_;
 
-	// DB 相关的元信息
+	// TODO: 都什么含义
+    // DB 相关的元信息
 	uint64_t next_file_number_;
 	uint64_t manifest_file_number_;
 	uint64_t last_sequence_;

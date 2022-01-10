@@ -6,10 +6,10 @@
 // 
 // 每次文件有变动时，leveldb 会把变动记录到一个 VersionEdit 变量中
 // 然后通过 VersionEdit 把变动应用到 current version，
-// 并把 current version 的快照，也就是 db 元信息保存到 MANIFEST 文件中
+// 并把 VersionEdit 作为一个 log record 给 Append 写到 MANIFEST 文件
 // 
 // MANIFEST 文件组织形式也是以 VersionEdit 的形式写入的
-// 它本身是一个 log 文件格式，一个 VersionEdit 就是一条log record
+// 它本身是一个 **log 文件格式**，**一个 VersionEdit 就是一条log record**
 
 #ifndef STORAGE_LEVELDB_DB_VERSION_EDIT_H_
 #define STORAGE_LEVELDB_DB_VERSION_EDIT_H_

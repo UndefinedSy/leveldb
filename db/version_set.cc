@@ -979,21 +979,23 @@ VersionSet::~VersionSet() {
   delete descriptor_file_;
 }
 
-void VersionSet::AppendVersion(Version* v) {
-  // Make "v" current
-  assert(v->refs_ == 0);
-  assert(v != current_);
-  if (current_ != nullptr) {
-    current_->Unref();
-  }
-  current_ = v;
-  v->Ref();
+/**
+ * 将 v 置为 VersionSet 的 current_ 
+ */
+void VersionSet::AppendVersion(Version* v)
+{
+    assert(v->refs_ == 0);
+    assert(v != current_);
 
-  // Append to linked list
-  v->prev_ = dummy_versions_.prev_;
-  v->next_ = &dummy_versions_;
-  v->prev_->next_ = v;
-  v->next_->prev_ = v;
+    if (current_ != nullptr) current_->Unref();
+    current_ = v;
+    v->Ref();
+
+    // Append to linked list
+    v->prev_ = dummy_versions_.prev_;
+    v->next_ = &dummy_versions_;
+    v->prev_->next_ = v;
+    v->next_->prev_ = v;
 }
 
 /**
@@ -1041,7 +1043,7 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu)
     // a temporary file that contains a snapshot of the current version.
     std::string new_manifest_file;
     Status s;
-    if (descriptor_log_ == nullptr)
+    if (descriptor_log_ == nullptr) // lazily opened file 还未建立
     {
         // No reason to unlock *mu here since we only hit this path in the
         // first call to LogAndApply (when opening the database).
@@ -1060,7 +1062,7 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu)
     {
         mu->Unlock();
 
-        // Write new record to MANIFEST log
+        // 将 VersionEdit 的内容, 即两个版本的 delta 记录到 MANIFEST 中
         if (s.ok())
         {
             std::string record;
@@ -1107,137 +1109,158 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu)
     return s;
 }
 
-Status VersionSet::Recover(bool* save_manifest) {
-  struct LogReporter : public log::Reader::Reporter {
-    Status* status;
-    void Corruption(size_t bytes, const Status& s) override {
-      if (this->status->ok()) *this->status = s;
-    }
-  };
-
-  // Read "CURRENT" file, which contains a pointer to the current manifest file
-  std::string current;
-  Status s = ReadFileToString(env_, CurrentFileName(dbname_), &current);
-  if (!s.ok()) {
-    return s;
-  }
-  if (current.empty() || current[current.size() - 1] != '\n') {
-    return Status::Corruption("CURRENT file does not end with newline");
-  }
-  current.resize(current.size() - 1);
-
-  std::string dscname = dbname_ + "/" + current;
-  SequentialFile* file;
-  s = env_->NewSequentialFile(dscname, &file);
-  if (!s.ok()) {
-    if (s.IsNotFound()) {
-      return Status::Corruption("CURRENT points to a non-existent file",
-                                s.ToString());
-    }
-    return s;
-  }
-
-  bool have_log_number = false;
-  bool have_prev_log_number = false;
-  bool have_next_file = false;
-  bool have_last_sequence = false;
-  uint64_t next_file = 0;
-  uint64_t last_sequence = 0;
-  uint64_t log_number = 0;
-  uint64_t prev_log_number = 0;
-  Builder builder(this, current_);
-  int read_records = 0;
-
-  {
-    LogReporter reporter;
-    reporter.status = &s;
-    log::Reader reader(file, &reporter, true /*checksum*/,
-                       0 /*initial_offset*/);
-    Slice record;
-    std::string scratch;
-    while (reader.ReadRecord(&record, &scratch) && s.ok()) {
-      ++read_records;
-      VersionEdit edit;
-      s = edit.DecodeFrom(record);
-      if (s.ok()) {
-        if (edit.has_comparator_ &&
-            edit.comparator_ != icmp_.user_comparator()->Name()) {
-          s = Status::InvalidArgument(
-              edit.comparator_ + " does not match existing comparator ",
-              icmp_.user_comparator()->Name());
+Status
+VersionSet::Recover(bool* save_manifest)
+{
+    struct LogReporter : public log::Reader::Reporter
+    {
+        Status* status;
+        void Corruption(size_t bytes, const Status& s) override
+        {
+            if (this->status->ok()) *this->status = s;
         }
-      }
+    };
 
-      if (s.ok()) {
-        builder.Apply(&edit);
-      }
+    // 首先读 "CURRENT" 文件, 其中是一个指向 current MANIFEST file 的指针
+    std::string current;
+    Status s = ReadFileToString(env_, CurrentFileName(dbname_), &current);
+    if (!s.ok()) return s;
 
-      if (edit.has_log_number_) {
-        log_number = edit.log_number_;
-        have_log_number = true;
-      }
+    if (current.empty() || current[current.size() - 1] != '\n')
+        return Status::Corruption("CURRENT file does not end with newline");
 
-      if (edit.has_prev_log_number_) {
-        prev_log_number = edit.prev_log_number_;
-        have_prev_log_number = true;
-      }
+    current.resize(current.size() - 1); // remove '\n'
 
-      if (edit.has_next_file_number_) {
-        next_file = edit.next_file_number_;
-        have_next_file = true;
-      }
-
-      if (edit.has_last_sequence_) {
-        last_sequence = edit.last_sequence_;
-        have_last_sequence = true;
-      }
-    }
-  }
-  delete file;
-  file = nullptr;
-
-  if (s.ok()) {
-    if (!have_next_file) {
-      s = Status::Corruption("no meta-nextfile entry in descriptor");
-    } else if (!have_log_number) {
-      s = Status::Corruption("no meta-lognumber entry in descriptor");
-    } else if (!have_last_sequence) {
-      s = Status::Corruption("no last-sequence-number entry in descriptor");
+    // open current MANIFEST file
+    std::string dscname = dbname_ + "/" + current;
+    SequentialFile* file;
+    s = env_->NewSequentialFile(dscname, &file);
+    if (!s.ok()) {
+        if (s.IsNotFound()) {
+            return Status::Corruption("CURRENT points to a non-existent file", s.ToString());
+        }
+        return s;
     }
 
-    if (!have_prev_log_number) {
-      prev_log_number = 0;
+    bool have_log_number = false;
+    bool have_prev_log_number = false;
+    bool have_next_file = false;
+    bool have_last_sequence = false;
+    uint64_t next_file = 0;
+    uint64_t last_sequence = 0;
+    uint64_t log_number = 0;
+    uint64_t prev_log_number = 0;
+    Builder builder(this, current_);
+    int read_records = 0;
+
+    {
+        LogReporter reporter;
+        reporter.status = &s;
+        log::Reader reader(file, &reporter, true /*checksum*/, 0 /*initial_offset*/);
+        Slice record;
+        std::string scratch;
+
+        // 读取 MANIFEST 中的 records 并将其恢复成 VersionEdit
+        while (reader.ReadRecord(&record, &scratch) && s.ok())
+        {
+            ++read_records;
+            VersionEdit edit;
+            s = edit.DecodeFrom(record);
+            if (s.ok())
+            {
+                if (edit.has_comparator_
+                    && edit.comparator_ != icmp_.user_comparator()->Name()) // comparator 不可变更
+                {
+                    s = Status::InvalidArgument(edit.comparator_ + " does not match existing comparator ",
+                                                icmp_.user_comparator()->Name());
+                }
+            }
+
+            // 将 VersionEdit 按序 Apply 到 current
+            if (s.ok()) builder.Apply(&edit);
+
+            if (edit.has_log_number_) {
+                log_number = edit.log_number_;
+                have_log_number = true;
+            }
+
+            if (edit.has_prev_log_number_) {
+                prev_log_number = edit.prev_log_number_;
+                have_prev_log_number = true;
+            }
+
+            if (edit.has_next_file_number_) {
+                next_file = edit.next_file_number_;
+                have_next_file = true;
+            }
+
+            if (edit.has_last_sequence_) {
+                last_sequence = edit.last_sequence_;
+                have_last_sequence = true;
+            }
+        }
+    }
+    delete file;
+    file = nullptr;
+
+    if (s.ok())
+    {
+        if (!have_next_file)
+        {
+            s = Status::Corruption("no meta-nextfile entry in descriptor");
+        }
+        else if (!have_log_number)
+        {
+            s = Status::Corruption("no meta-lognumber entry in descriptor");
+        }
+        else if (!have_last_sequence)
+        {
+            s = Status::Corruption("no last-sequence-number entry in descriptor");
+        }
+
+        if (!have_prev_log_number)
+        {
+            prev_log_number = 0;
+        }
+
+        MarkFileNumberUsed(prev_log_number);
+        MarkFileNumberUsed(log_number);
     }
 
-    MarkFileNumberUsed(prev_log_number);
-    MarkFileNumberUsed(log_number);
-  }
+    if (s.ok())
+    {
+        Version* v = new Version(this);
+        // 回放所有 Applied VersionEdit
+        builder.SaveTo(v);
+        // Install recovered version
+        Finalize(v);
+        // Make `v` as the new current version
+        AppendVersion(v);
 
-  if (s.ok()) {
-    Version* v = new Version(this);
-    builder.SaveTo(v);
-    // Install recovered version
-    Finalize(v);
-    AppendVersion(v);
-    manifest_file_number_ = next_file;
-    next_file_number_ = next_file + 1;
-    last_sequence_ = last_sequence;
-    log_number_ = log_number;
-    prev_log_number_ = prev_log_number;
+        manifest_file_number_ = next_file;
+        next_file_number_ = next_file + 1;
+        last_sequence_ = last_sequence;
+        log_number_ = log_number;
+        prev_log_number_ = prev_log_number;
 
-    // See if we can reuse the existing MANIFEST file.
-    if (ReuseManifest(dscname, current)) {
-      // No need to save new manifest
-    } else {
-      *save_manifest = true;
+        // See if we can reuse the existing MANIFEST file.
+        if (ReuseManifest(dscname, current))
+        {
+            // No need to save new manifest
+        }
+        else
+        {
+            *save_manifest = true;
+        }
     }
-  } else {
-    std::string error = s.ToString();
-    Log(options_->info_log, "Error recovering version set with %d records: %s",
-        read_records, error.c_str());
-  }
+    else // Error
+    {
+        std::string error = s.ToString();
+        Log(options_->info_log, "Error recovering version set with %d records: %s",
+                                read_records, error.c_str());
+    }
 
-  return s;
+    return s;
 }
 
 bool VersionSet::ReuseManifest(const std::string& dscname,
@@ -1271,10 +1294,11 @@ bool VersionSet::ReuseManifest(const std::string& dscname,
   return true;
 }
 
-void VersionSet::MarkFileNumberUsed(uint64_t number) {
-  if (next_file_number_ <= number) {
-    next_file_number_ = number + 1;
-  }
+void VersionSet::MarkFileNumberUsed(uint64_t number)
+{
+    if (next_file_number_ <= number) {
+        next_file_number_ = number + 1;
+    }
 }
 
 /**
@@ -1506,58 +1530,78 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
   return result;
 }
 
-Compaction* VersionSet::PickCompaction() {
-  Compaction* c;
-  int level;
+/**
+ * 挑选一个 level 和对应的 inputs 进行 compaction
+ * 优先根据 Finalize() 所生成的基于一个 level 的数据量(or file num in level-0) 的信息
+ * 其次根据 seek 次数信息决定
+ * @return 若找到则返回一个堆上的 *Compaction 对象指针. (调用者需要析构这个对象)
+ *         若不需要 Compaction 则返回 nullptr 
+ */
+Compaction*
+VersionSet::PickCompaction()
+{
+    Compaction* c;
+    int level;
 
-  // We prefer compactions triggered by too much data in a level over
-  // the compactions triggered by seeks.
-  const bool size_compaction = (current_->compaction_score_ >= 1);
-  const bool seek_compaction = (current_->file_to_compact_ != nullptr);
-  if (size_compaction) {
-    level = current_->compaction_level_;
-    assert(level >= 0);
-    assert(level + 1 < config::kNumLevels);
-    c = new Compaction(options_, level);
+    const bool size_compaction = (current_->compaction_score_ >= 1);
+    const bool seek_compaction = (current_->file_to_compact_ != nullptr);
 
-    // Pick the first file that comes after compact_pointer_[level]
-    for (size_t i = 0; i < current_->files_[level].size(); i++) {
-      FileMetaData* f = current_->files_[level][i];
-      if (compact_pointer_[level].empty() ||
-          icmp_.Compare(f->largest.Encode(), compact_pointer_[level]) > 0) {
-        c->inputs_[0].push_back(f);
-        break;
-      }
+    // 优先根据 Finalize 生成的 current compaction info 决定
+    if (size_compaction)
+    {
+        level = current_->compaction_level_;
+        assert(level >= 0);
+        assert(level + 1 < config::kNumLevels);
+        c = new Compaction(options_, level);
+
+        // 该 level 的 compact_pointer—— 之后的第一个 file 作为 compaction file
+        for (size_t i = 0; i < current_->files_[level].size(); i++)
+        {
+            FileMetaData* f = current_->files_[level][i];
+            if (compact_pointer_[level].empty()
+                || icmp_.Compare(f->largest.Encode(), compact_pointer_[level]) > 0)
+            {
+                c->inputs_[0].push_back(f);
+                break;
+            }
+        }
+
+        // 若该 level 走完一圈, 则回到该 level 的起点
+        if (c->inputs_[0].empty())
+            c->inputs_[0].push_back(current_->files_[level][0]);
     }
-    if (c->inputs_[0].empty()) {
-      // Wrap-around to the beginning of the key space
-      c->inputs_[0].push_back(current_->files_[level][0]);
+    // 其次如果有基于 seek count 的 compaction info
+    else if (seek_compaction)
+    {
+        level = current_->file_to_compact_level_;
+        c = new Compaction(options_, level);
+        c->inputs_[0].push_back(current_->file_to_compact_);
     }
-  } else if (seek_compaction) {
-    level = current_->file_to_compact_level_;
-    c = new Compaction(options_, level);
-    c->inputs_[0].push_back(current_->file_to_compact_);
-  } else {
-    return nullptr;
-  }
+    else
+    {
+        return nullptr;
+    }
 
-  c->input_version_ = current_;
-  c->input_version_->Ref();
+    // 本次需要 compaction
+    c->input_version_ = current_;
+    c->input_version_->Ref();
 
-  // Files in level 0 may overlap each other, so pick up all overlapping ones
-  if (level == 0) {
-    InternalKey smallest, largest;
-    GetRange(c->inputs_[0], &smallest, &largest);
-    // Note that the next call will discard the file we placed in
-    // c->inputs_[0] earlier and replace it with an overlapping set
-    // which will include the picked file.
-    current_->GetOverlappingInputs(0, &smallest, &largest, &c->inputs_[0]);
-    assert(!c->inputs_[0].empty());
-  }
+    // level-0 的文件彼此可能相互重叠, 因此需要所有的 overlapping files 作为 input
+    if (level == 0)
+    {
+        InternalKey smallest, largest;
+        GetRange(c->inputs_[0], &smallest, &largest);
+        // Note that the next call will discard the file we placed in
+        // c->inputs_[0] earlier and replace it with an overlapping set
+        // which will include the picked file.
+        current_->GetOverlappingInputs(0, &smallest, &largest, &c->inputs_[0]);
+        assert(!c->inputs_[0].empty());
+    }
 
-  SetupOtherInputs(c);
+    // TODO
+    SetupOtherInputs(c);
 
-  return c;
+    return c;
 }
 
 // Finds the largest key in a vector of files. Returns true if files it not
