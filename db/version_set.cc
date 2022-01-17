@@ -21,8 +21,9 @@
 
 namespace leveldb {
 
-static size_t TargetFileSize(const Options* options) {
-  return options->max_file_size;
+static size_t
+TargetFileSize(const Options* options) {
+    return options->max_file_size;
 }
 
 // Maximum bytes of overlaps in grandparent (i.e., level+2) before we
@@ -1043,17 +1044,21 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu)
     // a temporary file that contains a snapshot of the current version.
     std::string new_manifest_file;
     Status s;
-    if (descriptor_log_ == nullptr) // lazily opened file 还未建立
+
+    // lazily opened file 还未建立 或者 重新起了一个新的 MANIFEST
+    if (descriptor_log_ == nullptr)
     {
         // No reason to unlock *mu here since we only hit this path in the
         // first call to LogAndApply (when opening the database).
         assert(descriptor_file_ == nullptr);
+
         new_manifest_file = DescriptorFileName(dbname_, manifest_file_number_);
         edit->SetNextFile(next_file_number_);
         s = env_->NewWritableFile(new_manifest_file, &descriptor_file_);
         if (s.ok())
         {
             descriptor_log_ = new log::Writer(descriptor_file_);
+            // 将当前 Version 打一个快照作为新的 MANIFEST 的起点
             s = WriteSnapshot(descriptor_log_);
         }
     }
@@ -1263,35 +1268,42 @@ VersionSet::Recover(bool* save_manifest)
     return s;
 }
 
+/**
+ * Version 发生变动时, 判断是否可以复用当前的 MANIFEST 文件
+ * - 若当前 MANIFEST 文件还没有过大则会复用 MANIFEST, 新的 VersionEdit 会继续 Append
+ * - 若当前 MANIFEST 已经过大则可以以当前版本为 Snapshot, 创建新的 MANIFEST
+ */
 bool VersionSet::ReuseManifest(const std::string& dscname,
-                               const std::string& dscbase) {
-  if (!options_->reuse_logs) {
-    return false;
-  }
-  FileType manifest_type;
-  uint64_t manifest_number;
-  uint64_t manifest_size;
-  if (!ParseFileName(dscbase, &manifest_number, &manifest_type) ||
-      manifest_type != kDescriptorFile ||
-      !env_->GetFileSize(dscname, &manifest_size).ok() ||
-      // Make new compacted MANIFEST if old one is too big
-      manifest_size >= TargetFileSize(options_)) {
-    return false;
-  }
+                               const std::string& dscbase)
+{
+    if (!options_->reuse_logs) return false;
 
-  assert(descriptor_file_ == nullptr);
-  assert(descriptor_log_ == nullptr);
-  Status r = env_->NewAppendableFile(dscname, &descriptor_file_);
-  if (!r.ok()) {
-    Log(options_->info_log, "Reuse MANIFEST: %s\n", r.ToString().c_str());
+    FileType manifest_type;
+    uint64_t manifest_number;
+    uint64_t manifest_size;
+
+    // 若当前的 MANIFEST 过大则创建新的 compacted MANIFEST
+    if (!ParseFileName(dscbase, &manifest_number, &manifest_type)
+        || manifest_type != kDescriptorFile
+        || !env_->GetFileSize(dscname, &manifest_size).ok()
+        || manifest_size >= TargetFileSize(options_))
+    {
+        return false;
+    }
+
     assert(descriptor_file_ == nullptr);
-    return false;
-  }
+    assert(descriptor_log_ == nullptr);
+    Status r = env_->NewAppendableFile(dscname, &descriptor_file_);
+    if (!r.ok()) {
+        Log(options_->info_log, "Reuse MANIFEST: %s\n", r.ToString().c_str());
+        assert(descriptor_file_ == nullptr);
+        return false;
+    }
 
-  Log(options_->info_log, "Reusing MANIFEST %s\n", dscname.c_str());
-  descriptor_log_ = new log::Writer(descriptor_file_, manifest_size);
-  manifest_file_number_ = manifest_number;
-  return true;
+    Log(options_->info_log, "Reusing MANIFEST %s\n", dscname.c_str());
+    descriptor_log_ = new log::Writer(descriptor_file_, manifest_size);
+    manifest_file_number_ = manifest_number;
+    return true;
 }
 
 void VersionSet::MarkFileNumberUsed(uint64_t number)
@@ -1347,34 +1359,45 @@ void VersionSet::Finalize(Version* v)
     v->compaction_score_ = best_score;
 }
 
-Status VersionSet::WriteSnapshot(log::Writer* log) {
-  // TODO: Break up into multiple records to reduce memory usage on recovery?
+/**
+ * 将 VersionSet 每层的 compaction pointer, current Version 中的各层 files 的 FileMetaData
+ * 以一个 VersionEdit 的形式写入到当前的 MANIFEST 文件中作为 Base
+ * @param log[IN], 当前的 MANIFEST 文件的 log writer 
+ */
+Status VersionSet::WriteSnapshot(log::Writer* log)
+{
+    // TODO: Break up into multiple records to reduce memory usage on recovery?
 
-  // Save metadata
-  VersionEdit edit;
-  edit.SetComparatorName(icmp_.user_comparator()->Name());
+    // Save metadata
+    VersionEdit edit;
+    edit.SetComparatorName(icmp_.user_comparator()->Name());
 
-  // Save compaction pointers
-  for (int level = 0; level < config::kNumLevels; level++) {
-    if (!compact_pointer_[level].empty()) {
-      InternalKey key;
-      key.DecodeFrom(compact_pointer_[level]);
-      edit.SetCompactPointer(level, key);
+    // Save compaction pointers
+    for (int level = 0; level < config::kNumLevels; level++)
+    {
+        if (!compact_pointer_[level].empty())
+        {
+            InternalKey key;
+            key.DecodeFrom(compact_pointer_[level]);
+            edit.SetCompactPointer(level, key);
+        }
     }
-  }
 
-  // Save files
-  for (int level = 0; level < config::kNumLevels; level++) {
-    const std::vector<FileMetaData*>& files = current_->files_[level];
-    for (size_t i = 0; i < files.size(); i++) {
-      const FileMetaData* f = files[i];
-      edit.AddFile(level, f->number, f->file_size, f->smallest, f->largest);
+    // Save files
+    for (int level = 0; level < config::kNumLevels; level++)
+    {
+        const std::vector<FileMetaData*>& files = current_->files_[level];
+
+        for (size_t i = 0; i < files.size(); i++)
+        {
+            const FileMetaData* f = files[i];
+            edit.AddFile(level, f->number, f->file_size, f->smallest, f->largest);
+        }
     }
-  }
 
-  std::string record;
-  edit.EncodeTo(&record);
-  return log->AddRecord(record);
+    std::string record;
+    edit.EncodeTo(&record);
+    return log->AddRecord(record);
 }
 
 int VersionSet::NumLevelFiles(int level) const {
@@ -1531,9 +1554,10 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
 }
 
 /**
- * 挑选一个 level 和对应的 inputs 进行 compaction
- * 优先根据 Finalize() 所生成的基于一个 level 的数据量(or file num in level-0) 的信息
- * 其次根据 seek 次数信息决定
+ * 首先挑选本次 compaction 所在的 level-n 的 inputs:
+ * - 优先根据 Finalize() 得到的基于 level 的 file num / total bytes 的信息
+ * - 其次根据 SSTable file 的 seek 次数信息
+ * 确定了 level-n 的 inputs 之后再确定 level-(n+1) 的 inputs
  * @return 若找到则返回一个堆上的 *Compaction 对象指针. (调用者需要析构这个对象)
  *         若不需要 Compaction 则返回 nullptr 
  */
@@ -1546,7 +1570,7 @@ VersionSet::PickCompaction()
     const bool size_compaction = (current_->compaction_score_ >= 1);
     const bool seek_compaction = (current_->file_to_compact_ != nullptr);
 
-    // 优先根据 Finalize 生成的 current compaction info 决定
+    // 优先根据 level 的 file num(level-0) / file size(level > 0) 决定
     if (size_compaction)
     {
         level = current_->compaction_level_;
@@ -1586,7 +1610,8 @@ VersionSet::PickCompaction()
     c->input_version_ = current_;
     c->input_version_->Ref();
 
-    // level-0 的文件彼此可能相互重叠, 因此需要所有的 overlapping files 作为 input
+    // 若本次 compaction 发生在 level-0
+    // 由于 level-0 文件彼此可能相互重叠, 因此需要所有的 overlapping files 作为 input
     if (level == 0)
     {
         InternalKey smallest, largest;
@@ -1683,9 +1708,13 @@ void AddBoundaryInputs(const InternalKeyComparator& icmp,
   }
 }
 
-void VersionSet::SetupOtherInputs(Compaction* c) {
-  const int level = c->level();
-  InternalKey smallest, largest;
+/**
+ * TODO: 
+ */
+void VersionSet::SetupOtherInputs(Compaction* c)
+{
+    const int level = c->level();
+    InternalKey smallest, largest;
 
   AddBoundaryInputs(icmp_, current_->files_[level], &c->inputs_[0]);
   GetRange(c->inputs_[0], &smallest, &largest);

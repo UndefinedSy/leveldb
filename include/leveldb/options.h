@@ -112,7 +112,13 @@ struct LEVELDB_EXPORT Options {
   // compactions and hence longer latency/performance hiccups.
   // Another reason to increase this parameter might be when you are
   // initially populating a large database.
-  size_t max_file_size = 2 * 1024 * 1024;
+
+    // 当 LevelDB 向一个文件写入数据总量到达该 option 时会切换到一个新的文件
+    // 绝大多数的 clients 都不需要考虑这个参数
+    // - 如果底层文件系统对于 larger file 更高效则可考虑调大该参数
+    // - 另一个需要调大该参数的理由可能是, 当你 initially 要填充一个大型数据库时
+    // - 该参数过大的缺点在于 longer compactions, 并且因此会有 longer latency/performance 抖动
+    size_t max_file_size = 2 * 1024 * 1024;
 
   // Compress blocks using the specified compression algorithm.  This
   // parameter can be changed dynamically.

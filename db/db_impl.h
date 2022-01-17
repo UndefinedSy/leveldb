@@ -137,6 +137,7 @@ private:
 
     void RecordBackgroundError(const Status& s);
 
+    // Background Compaction related
     void MaybeScheduleCompaction() EXCLUSIVE_LOCKS_REQUIRED(mutex_);
     static void BGWork(void* db);
     void BackgroundCall();

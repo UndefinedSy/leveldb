@@ -236,9 +236,6 @@ public:
     // 如果没有这样的 file 则返回 0
     uint64_t PrevLogNumber() const { return prev_log_number_; }
 
-    // 为一次新的 compaction 挑选 level 和 inputs
-    // 如果不需要做 compaction 则返回 nullptr
-    // 否则返回一个堆上的 *Compaction 对象指针. 调用者需要析构这个对象
     Compaction* PickCompaction();
 
     // Return a compaction object for compacting the range [begin,end] in
@@ -257,7 +254,11 @@ public:
     // 创建一个迭代器，读取 "*c "的压实输入。当不再需要时，调用者应该删除这个迭代器。
     Iterator* MakeInputIterator(Compaction* c);
 
-    // 如果有 level 需要 compaction 则返回 true
+    /**
+     * 判断 current_ Version 是否需要 compaction, 以下情况下会返回 True
+     * - 存在有一个 level 的 compaction_score_ > 1 (由于文件数或者文件大小)
+     * - 存在有文件因为 seek 次数超过阈值
+     */
     bool NeedsCompaction() const
     {
         Version* v = current_;
@@ -329,77 +330,77 @@ private:
 	std::string compact_pointer_[config::kNumLevels];
 };
 
-// A Compaction encapsulates information about a compaction.
-class Compaction {
- public:
-  ~Compaction();
+// `Compaction` 封装了关于一次 compaction 的信息
+class Compaction
+{
+public:
+    ~Compaction();
 
-  // Return the level that is being compacted.  Inputs from "level"
-  // and "level+1" will be merged to produce a set of "level+1" files.
-  int level() const { return level_; }
+    // 返回将被 compacted 的 level-n.
+    // Compaction 将根据 level-n 和 level-(n+1) 的 Inputs 做 merge 得到一组 level-(n+1) 文件
+    int level() const { return level_; }
 
-  // Return the object that holds the edits to the descriptor done
-  // by this compaction.
-  VersionEdit* edit() { return &edit_; }
+    // Return the object that holds the edits to the descriptor done
+    // by this compaction.
+    // 返回持有本次 compaction 所处理的 descriptor 的 VersionEdit
+    VersionEdit* edit() { return &edit_; }
 
-  // "which" must be either 0 or 1
-  int num_input_files(int which) const { return inputs_[which].size(); }
+    // "which" must be either 0 or 1
+    int num_input_files(int which) const { return inputs_[which].size(); }
 
-  // Return the ith input file at "level()+which" ("which" must be 0 or 1).
-  FileMetaData* input(int which, int i) const { return inputs_[which][i]; }
+    // Return the ith input file at "level()+which" ("which" must be 0 or 1).
+    FileMetaData* input(int which, int i) const { return inputs_[which][i]; }
 
-  // Maximum size of files to build during this compaction.
-  uint64_t MaxOutputFileSize() const { return max_output_file_size_; }
+    // Maximum size of files to build during this compaction.
+    uint64_t MaxOutputFileSize() const { return max_output_file_size_; }
 
-  // Is this a trivial compaction that can be implemented by just
-  // moving a single input file to the next level (no merging or splitting)
-  bool IsTrivialMove() const;
+    // 判断本次 compaction 是否为 trivial, 即只需要将单个的 input 文件移动到 next level
+    // 而不需要做 merging 或者 splitting
+    bool IsTrivialMove() const;
 
-  // Add all inputs to this compaction as delete operations to *edit.
-  void AddInputDeletions(VersionEdit* edit);
+    // 将本次 Compaction 的所有 inputs 都作为 delete operations 添加到 *edit
+    void AddInputDeletions(VersionEdit* edit);
 
-  // Returns true if the information we have available guarantees that
-  // the compaction is producing data in "level+1" for which no data exists
-  // in levels greater than "level+1".
-  bool IsBaseLevelForKey(const Slice& user_key);
+    // 返回 Ture 表示, 我们现有的信息保证本次 compaction 在 level-(n+1) 中产生的数据
+    // 不存在大于 level(n+1) 的层中
+    bool IsBaseLevelForKey(const Slice& user_key);
 
-  // Returns true iff we should stop building the current output
-  // before processing "internal_key".
-  bool ShouldStopBefore(const Slice& internal_key);
+    // 返回 True 表示我们应在处理 internal_key 之前就停止构建当前的 output
+    bool ShouldStopBefore(const Slice& internal_key);
 
-  // Release the input version for the compaction, once the compaction
-  // is successful.
-  void ReleaseInputs();
+    // 一旦 Compacation 成功，释放本次 compaction 的 input version
+    void ReleaseInputs();
 
- private:
-  friend class Version;
-  friend class VersionSet;
+private:
+    friend class Version;
+    friend class VersionSet;
 
-  Compaction(const Options* options, int level);
+    Compaction(const Options* options, int level);
 
-  int level_;
-  uint64_t max_output_file_size_;
-  Version* input_version_;
-  VersionEdit edit_;
+    int level_;
+    uint64_t max_output_file_size_;
+    Version* input_version_;
+    VersionEdit edit_;
 
-  // Each compaction reads inputs from "level_" and "level_+1"
-  std::vector<FileMetaData*> inputs_[2];  // The two sets of inputs
+    // 指代 level-n 和 level-(n+1)
+    std::vector<FileMetaData*> inputs_[2];  // The two sets of inputs
 
-  // State used to check for number of overlapping grandparent files
-  // (parent == level_ + 1, grandparent == level_ + 2)
-  std::vector<FileMetaData*> grandparents_;
-  size_t grandparent_index_;  // Index in grandparent_starts_
-  bool seen_key_;             // Some output key has been seen
-  int64_t overlapped_bytes_;  // Bytes of overlap between current output
-                              // and grandparent files
+    // 用于检查 overlapping grandparent 文件数量的相关元数据
+    // (parent == level_(n+1), grandparent == level_(n+2)
+    std::vector<FileMetaData*> grandparents_;
+    size_t grandparent_index_;  // Index in grandparent_starts_
+    bool seen_key_;             // Some output key has been seen
+    int64_t overlapped_bytes_;  // current output 和 grandparent files 之间 overlap 的字节数
 
-  // State for implementing IsBaseLevelForKey
+    // 用于实现 IsBaseLevelForKey 的 State
 
-  // level_ptrs_ holds indices into input_version_->levels_: our state
-  // is that we are positioned at one of the file ranges for each
-  // higher level than the ones involved in this compaction (i.e. for
-  // all L >= level_ + 2).
-  size_t level_ptrs_[config::kNumLevels];
+    // level_ptrs_ holds indices into input_version_->levels_: our state
+    // is that we are positioned at one of the file ranges for each
+    // higher level than the ones involved in this compaction (i.e. for
+    // all L >= level_ + 2).
+    // level_ptrs_ 持有 input_version_->levels_ 的索引:
+    // 我们的状态是，我们被定位在比这次压实所涉及的级别更高的文件范围中的一个（即对所有L >= level_ + 2）。
+    size_t level_ptrs_[config::kNumLevels];
 };
 
 }  // namespace leveldb

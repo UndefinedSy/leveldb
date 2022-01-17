@@ -680,6 +680,12 @@ void DBImpl::RecordBackgroundError(const Status& s) {
   }
 }
 
+/**
+ * 以下三种场景下满足其一则会 schedule 一个后台的 compaction:
+ * - imm != nullptr, 即需要将 Memtable dump 成 SSTable
+ * - manual_compaction_ != nullptr, 即通过 DBImpl::CompactRange 人工触发了一次 compaction
+ * - versions_->NeedsCompaction() 返回 true, 即 current Version 的文件数量/大小/seek 次数的状态
+ */
 void DBImpl::MaybeScheduleCompaction()
 {
 	mutex_.AssertHeld();
@@ -710,26 +716,33 @@ void DBImpl::MaybeScheduleCompaction()
 }
 
 void DBImpl::BGWork(void* db) {
-  reinterpret_cast<DBImpl*>(db)->BackgroundCall();
+    reinterpret_cast<DBImpl*>(db)->BackgroundCall();
 }
 
-void DBImpl::BackgroundCall() {
-  MutexLock l(&mutex_);
-  assert(background_compaction_scheduled_);
-  if (shutting_down_.load(std::memory_order_acquire)) {
-    // No more background work when shutting down.
-  } else if (!bg_error_.ok()) {
-    // No more background work after a background error.
-  } else {
-    BackgroundCompaction();
-  }
+void DBImpl::BackgroundCall()
+{
+    MutexLock l(&mutex_);
+    assert(background_compaction_scheduled_);
 
-  background_compaction_scheduled_ = false;
+    if (shutting_down_.load(std::memory_order_acqsuire))
+    {
+        // No more background work when shutting down.
+    }
+    else if (!bg_error_.ok())
+    {
+        // No more background work after a background error.
+    }
+    else
+    {
+        BackgroundCompaction();
+    }
 
-  // Previous compaction may have produced too many files in a level,
-  // so reschedule another compaction if needed.
-  MaybeScheduleCompaction();
-  background_work_finished_signal_.SignalAll();
+    background_compaction_scheduled_ = false;
+
+    // Previous compaction may have produced too many files in a level,
+    // so reschedule another compaction if needed.
+    MaybeScheduleCompaction();
+    background_work_finished_signal_.SignalAll();
 }
 
 void DBImpl::BackgroundCompaction() {
@@ -1145,51 +1158,73 @@ int64_t DBImpl::TEST_MaxNextLevelOverlappingBytes() {
   return versions_->MaxNextLevelOverlappingBytes();
 }
 
-Status DBImpl::Get(const ReadOptions& options, const Slice& key,
-                   std::string* value) {
-  Status s;
-  MutexLock l(&mutex_);
-  SequenceNumber snapshot;
-  if (options.snapshot != nullptr) {
-    snapshot =
-        static_cast<const SnapshotImpl*>(options.snapshot)->sequence_number();
-  } else {
-    snapshot = versions_->LastSequence();
-  }
+/**
+ * 尝试在 DB 中点查 Key
+ * @param options[IN]
+ * @param key[IN]
+ * @param value[OUT], 如果 key 存在，则会在 value 中存入对应的 value
+ *  				  如果 key 不存在，则 *value **不会被修改**
+ * @return 当未发发生错误，且 key 存在时返回 OK
+ * 		   当未发生错误，且 key 不存在时返回状态 Status::IsNotFound() 为 true
+ * 		   其他错误会有别的 Status
+ */
+Status
+DBImpl::Get(const ReadOptions& options, const Slice& key,
+            std::string* value)
+{
+    Status s;
+    MutexLock l(&mutex_);
+    SequenceNumber snapshot;
 
-  MemTable* mem = mem_;
-  MemTable* imm = imm_;
-  Version* current = versions_->current();
-  mem->Ref();
-  if (imm != nullptr) imm->Ref();
-  current->Ref();
-
-  bool have_stat_update = false;
-  Version::GetStats stats;
-
-  // Unlock while reading from files and memtables
-  {
-    mutex_.Unlock();
-    // First look in the memtable, then in the immutable memtable (if any).
-    LookupKey lkey(key, snapshot);
-    if (mem->Get(lkey, value, &s)) {
-      // Done
-    } else if (imm != nullptr && imm->Get(lkey, value, &s)) {
-      // Done
-    } else {
-      s = current->Get(options, lkey, value, &stats);
-      have_stat_update = true;
+    if (options.snapshot != nullptr)
+    {
+        snapshot = static_cast<const SnapshotImpl*>(options.snapshot)->sequence_number();
     }
-    mutex_.Lock();
-  }
+    else
+    {
+        snapshot = versions_->LastSequence();
+    }
 
-  if (have_stat_update && current->UpdateStats(stats)) {
-    MaybeScheduleCompaction();
-  }
-  mem->Unref();
-  if (imm != nullptr) imm->Unref();
-  current->Unref();
-  return s;
+    MemTable* mem = mem_; mem->Ref();
+    MemTable* imm = imm_; if (imm != nullptr) imm->Ref();
+    Version* current = versions_->current(); current->Ref();
+
+    bool have_stat_update = false;
+    Version::GetStats stats;
+
+    // Unlock while reading from files and memtables
+    {
+        mutex_.Unlock();
+
+        LookupKey lkey(key, snapshot);
+        if (mem->Get(lkey, value, &s)) // 首先查 Memtable
+        {
+            // Done
+        }
+        else if (imm != nullptr && imm->Get(lkey, value, &s)) // 其次查 Immutable Memtable (如果有的话)
+        {
+            // Done
+        }
+        else // 然后查 current Version 重的 log file
+        {
+            s = current->Get(options, lkey, value, &stats);
+            have_stat_update = true;
+        }
+
+        mutex_.Lock();
+    }
+
+    if (have_stat_update && current->UpdateStats(stats))
+    {
+        // 若本次查找到了 SSTable file, 且有文件因为 seek 次数被标记为待 compaction
+        MaybeScheduleCompaction();
+    }
+
+    mem->Unref();
+    if (imm != nullptr) imm->Unref();
+    current->Unref();
+
+    return s;
 }
 
 Iterator* DBImpl::NewIterator(const ReadOptions& options) {
