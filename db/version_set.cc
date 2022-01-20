@@ -953,7 +953,8 @@ public:
     }
 };
 
-VersionSet::VersionSet(const std::string& dbname, const Options* options,
+VersionSet::VersionSet(const std::string& dbname,
+                       const Options* options,
                        TableCache* table_cache,
                        const InternalKeyComparator* cmp)
     : env_(options->env)
@@ -969,8 +970,9 @@ VersionSet::VersionSet(const std::string& dbname, const Options* options,
     , descriptor_file_(nullptr)
     , descriptor_log_(nullptr)
     , dummy_versions_(this)
-    , current_(nullptr) {
-  AppendVersion(new Version(this));
+    , current_(nullptr)
+{
+    AppendVersion(new Version(this));
 }
 
 VersionSet::~VersionSet() {
@@ -1418,48 +1420,72 @@ const char* VersionSet::LevelSummary(LevelSummaryStorage* scratch) const {
   return scratch->buffer;
 }
 
-uint64_t VersionSet::ApproximateOffsetOf(Version* v, const InternalKey& ikey) {
-  uint64_t result = 0;
-  for (int level = 0; level < config::kNumLevels; level++) {
-    const std::vector<FileMetaData*>& files = v->files_[level];
-    for (size_t i = 0; i < files.size(); i++) {
-      if (icmp_.Compare(files[i]->largest, ikey) <= 0) {
-        // Entire file is before "ikey", so just add the file size
-        result += files[i]->file_size;
-      } else if (icmp_.Compare(files[i]->smallest, ikey) > 0) {
-        // Entire file is after "ikey", so ignore
-        if (level > 0) {
-          // Files other than level 0 are sorted by meta->smallest, so
-          // no further files in this level will contain data for
-          // "ikey".
-          break;
+/**
+ * 逐层遍历 SSTable files, 计算在每一层中, key range 在 ikey 之前的部分的 offset
+ * @return 返回的是所有 level 中位于 `ikey` 之前的 key range offset 之和
+ */
+uint64_t
+VersionSet::ApproximateOffsetOf(Version* v, const InternalKey& ikey)
+{
+    uint64_t result = 0;
+    for (int level = 0; level < config::kNumLevels; level++)
+    {
+        const std::vector<FileMetaData*>& files = v->files_[level];
+        for (size_t i = 0; i < files.size(); i++)
+        {
+            if (icmp_.Compare(files[i]->largest, ikey) <= 0)
+            {
+                // Entire file is before "ikey", so just add the file size
+                result += files[i]->file_size;
+            }
+            else if (icmp_.Compare(files[i]->smallest, ikey) > 0)
+            {
+                // Entire file is after "ikey", so ignore
+                // 该文件的 key range 在 ikey 之后, 直接忽略
+                if (level > 0)
+                {
+                    // level-0 以外的文件本身是有序且无 overlap 的
+                    // 如果一个 level 中某个文件的 smallest 在 ikey 之后, 则该 level 不需要再看
+                    break;
+                }
+            }
+            else
+            {
+                // `ikey` 落在该 SSTable 的 key range 中
+                // 加上 `ikey` 在这个 table 中的 approximate offset
+                Table* tableptr;
+                Iterator* iter = table_cache_->NewIterator(
+                    ReadOptions(), files[i]->number, files[i]->file_size, &tableptr);
+
+                if (tableptr != nullptr)
+                    result += tableptr->ApproximateOffsetOf(ikey.Encode());
+                delete iter;
+            }
         }
-      } else {
-        // "ikey" falls in the range for this table.  Add the
-        // approximate offset of "ikey" within the table.
-        Table* tableptr;
-        Iterator* iter = table_cache_->NewIterator(
-            ReadOptions(), files[i]->number, files[i]->file_size, &tableptr);
-        if (tableptr != nullptr) {
-          result += tableptr->ApproximateOffsetOf(ikey.Encode());
-        }
-        delete iter;
-      }
     }
-  }
-  return result;
+    return result;
 }
 
-void VersionSet::AddLiveFiles(std::set<uint64_t>* live) {
-  for (Version* v = dummy_versions_.next_; v != &dummy_versions_;
-       v = v->next_) {
-    for (int level = 0; level < config::kNumLevels; level++) {
-      const std::vector<FileMetaData*>& files = v->files_[level];
-      for (size_t i = 0; i < files.size(); i++) {
-        live->insert(files[i]->number);
-      }
+/**
+ * 将任何还未丢弃(即仍然有效)的 Version 中的 files 的 number 记录到 *live 中
+ * 这可能会改变一些 internal state
+ * @param live[OUT]
+ */
+void VersionSet::AddLiveFiles(std::set<uint64_t>* live)
+{
+    for (Version* v = dummy_versions_.next_;
+         v != &dummy_versions_;
+         v = v->next_)
+    {
+        for (int level = 0; level < config::kNumLevels; level++)
+        {
+            const std::vector<FileMetaData*>& files = v->files_[level];
+            for (size_t i = 0; i < files.size(); i++)
+            {
+                live->insert(files[i]->number);
+            }
+        }
     }
-  }
 }
 
 int64_t VersionSet::NumLevelBytes(int level) const {

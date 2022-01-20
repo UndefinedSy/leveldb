@@ -44,13 +44,7 @@ struct LEVELDB_EXPORT Range {
 // DB 是并发访问安全的，不需要任何外部的 synchronization
 class LEVELDB_EXPORT DB {
 public:
-	// 用于打开一个以 name 标识的 DB，调用者应该在不需要 DB 时 delete *dbptr
-	// 
-	// @param name[IN], 要打开的 DB 的 name
-	// @param dbptr[OUT], 存储一个指向 heap-allocated DB 的指针
-	// @return 发生错误是会返回一个 non-OK status，并且 dbptr 会是一个 nullptr
-	static Status Open(const Options& options,
-					   const std::string& name, DB** dbptr);
+	static Status Open(const Options& options, const std::string& name, DB** dbptr);
 
 	DB() = default;
 

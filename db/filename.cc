@@ -73,13 +73,21 @@ std::string OldInfoLogFileName(const std::string& dbname) {
   return dbname + "/LOG.old";
 }
 
-// Owned filenames have the form:
-//    dbname/CURRENT
-//    dbname/LOCK
-//    dbname/LOG
-//    dbname/LOG.old
-//    dbname/MANIFEST-[0-9]+
-//    dbname/[0-9]+.(log|sst|ldb)
+/**
+ * 尝试解析传入的 filename, 判断其是否是一个 leveldb file
+ * Owned filenames 包含如下的格式:
+ * - dbname/CURRENT
+ * - dbname/LOCK
+ * - dbname/LOG
+ * - dbname/LOG.old
+ * - dbname/MANIFEST-[0-9]+
+ * - dbname/[0-9]+.(log|sst|ldb)
+ * 
+ * @param filename[IN], 待解析文件名
+ * @param number[OUT], 会存入 filename 中编码的数字
+ * @param type[OUT], 会存入该文件的类型
+ * @return 如果 filename 解析成功返回 true, 否则返回 false
+ */
 bool ParseFileName(const std::string& filename, uint64_t* number,
                    FileType* type) {
   Slice rest(filename);
@@ -126,21 +134,25 @@ bool ParseFileName(const std::string& filename, uint64_t* number,
 }
 
 Status SetCurrentFile(Env* env, const std::string& dbname,
-                      uint64_t descriptor_number) {
-  // Remove leading "dbname/" and add newline to manifest file name
-  std::string manifest = DescriptorFileName(dbname, descriptor_number);
-  Slice contents = manifest;
-  assert(contents.starts_with(dbname + "/"));
-  contents.remove_prefix(dbname.size() + 1);
-  std::string tmp = TempFileName(dbname, descriptor_number);
-  Status s = WriteStringToFileSync(env, contents.ToString() + "\n", tmp);
-  if (s.ok()) {
-    s = env->RenameFile(tmp, CurrentFileName(dbname));
-  }
-  if (!s.ok()) {
-    env->RemoveFile(tmp);
-  }
-  return s;
+                      uint64_t descriptor_number)
+{
+    // Remove leading "dbname/" and add newline to manifest file name
+    std::string manifest = DescriptorFileName(dbname, descriptor_number);
+    Slice contents = manifest;
+    assert(contents.starts_with(dbname + "/"));
+ 
+    // Remove leading "dbname/"
+    contents.remove_prefix(dbname.size() + 1);
+    std::string tmp = TempFileName(dbname, descriptor_number);  /* dbname/d_number.dbtmp */
+    Status s = WriteStringToFileSync(env, contents.ToString() + "\n", tmp);
+    
+    if (s.ok()) {
+        s = env->RenameFile(tmp, CurrentFileName(dbname));
+    }
+    if (!s.ok()) {
+        env->RemoveFile(tmp);
+    }
+    return s;
 }
 
 }  // namespace leveldb

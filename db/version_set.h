@@ -226,7 +226,7 @@ public:
         last_sequence_ = s;
     }
 
-    // Mark the specified file number as used.
+    // Mark the specified file number as used. 推高 next_file_number_
     void MarkFileNumberUsed(uint64_t number);
 
     // Return the current log file number.

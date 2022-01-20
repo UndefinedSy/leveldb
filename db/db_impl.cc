@@ -146,8 +146,7 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname)
     , tmp_batch_(new WriteBatch)
     , background_compaction_scheduled_(false)
     , manual_compaction_(nullptr)
-    , versions_(new VersionSet(dbname_, &options_, table_cache_,
-                               &internal_comparator_))
+    , versions_(new VersionSet(dbname_, &options_, table_cache_, &internal_comparator_))
     {}
 
 DBImpl::~DBImpl() {
@@ -187,13 +186,11 @@ DBImpl::NewDB() {
     new_db.SetNextFile(2);
     new_db.SetLastSequence(0);
 
-    // DB 创建时 sequence 为 1
-    const std::string manifest = DescriptorFileName(dbname_, 1);
+    const std::string manifest = DescriptorFileName(dbname_, 1); /* dbname_/MANIFEST-000001 */
     WritableFile* file;
     Status s = env_->NewWritableFile(manifest, &file);
-    if (!s.ok()) {
-        return s;
-    }
+    if (!s.ok()) return s;
+
     {
         log::Writer log(file);
         std::string record;
@@ -207,6 +204,7 @@ DBImpl::NewDB() {
         }
     }
     delete file;
+
     if (s.ok()) {
         // Make "CURRENT" file that points to the new manifest file.
         s = SetCurrentFile(env_, dbname_, 1);
@@ -292,43 +290,51 @@ void DBImpl::RemoveObsoleteFiles() {
   mutex_.Lock();
 }
 
+/**
+ * 从持久存储中恢复 dbname_ 对应 db 的数据.
+ * 这可能需要进行大量工作来恢复最近记录的更新.
+ * @param edit[OUT], 对这个 fd 所做的任何修改都会添加到 *edit
+ * @param save_manifest[OUT],
+ */
 Status
 DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
     mutex_.AssertHeld();
 
-    // Ignore error from CreateDir since the creation of the DB is
-    // committed only when the descriptor is created, and this directory
-    // may already exist from a previous failed creation attempt.
     // 建目录 dbname_ && 上文件锁
+    // 这里忽略 CreateDir 中的 error, 因为只有当 fd 已被创建了, 才会 commit 这个 DB 的创建
+    // 而这个目录可能已经存在于之前失败的创建尝试中
     env_->CreateDir(dbname_);
     assert(db_lock_ == nullptr);
     Status s = env_->LockFile(LockFileName(dbname_), &db_lock_);
-    if (!s.ok()) {
-        return s;
-    }
+    if (!s.ok()) return s;
 
-    if (!env_->FileExists(CurrentFileName(dbname_))) {
-        if (options_.create_if_missing) {
+    if (!env_->FileExists(CurrentFileName(dbname_))) /* dbname_/CURRENT */
+    {
+        if (options_.create_if_missing)
+        {
             Log(options_.info_log, "Creating DB %s since it was missing.",
                 dbname_.c_str());
+
             s = NewDB();
-            if (!s.ok()) {
-                return s;
-            }
-        } else {
+            if (!s.ok()) return s;
+        }
+        else
+        {
             return Status::InvalidArgument(
                 dbname_, "does not exist (create_if_missing is false)");
         }
-    } else {
+    }
+    else
+    {
         if (options_.error_if_exists) {
             return Status::InvalidArgument(dbname_, "exists (error_if_exists is true)");
         }
     }
 
+    // 尝试从 CURRENT 的 manifest 中恢复 VersionSet
     s = versions_->Recover(save_manifest);
-    if (!s.ok()) {
-        return s;
-    }
+    if (!s.ok()) return s;
+
     SequenceNumber max_sequence(0);
 
     // Recover from all newer log files than the ones named in the
@@ -338,137 +344,172 @@ DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
     // Note that PrevLogNumber() is no longer used, but we pay
     // attention to it in case we are recovering a database
     // produced by an older version of leveldb.
+    // 尝试从所有比 MANIFEST 文件中记录的 log files 更新的文件中恢复
+    // (这些更新的文件可能是由前一个版本所添加, 但还没有记录到 MANIFEST 中
+    //  这种情况可能出现在 Memtable 或者 Immemtable 还没来得及写入
+    //  SSTable file, db 就挂掉了)
+    // 
+    // 需要注意的是, PrevLogNumber() 是早版本 leveldb 的机制, 目前不再使用
+    // 这里主要是为了保持向前兼容, 以防恢复一个由旧版本的 leveldb 产生的数据库
     const uint64_t min_log = versions_->LogNumber();
     const uint64_t prev_log = versions_->PrevLogNumber();
     std::vector<std::string> filenames;
+    // 获取 dbname_ 目录下的所有文件
     s = env_->GetChildren(dbname_, &filenames);
-    if (!s.ok()) {
-        return s;
-    }
+    if (!s.ok()) return s;
+    
     std::set<uint64_t> expected;
     versions_->AddLiveFiles(&expected);
     uint64_t number;
     FileType type;
     std::vector<uint64_t> logs;
-    for (size_t i = 0; i < filenames.size(); i++) {
-        if (ParseFileName(filenames[i], &number, &type)) {
+    for (size_t i = 0; i < filenames.size(); i++)
+    {
+        // 这里会先从 expected 中移除目录下的文件名
+        // 然后会将 > versions_->LogNumber() 的文件名加入到 logs
+        // logs 中即是未被记录在 VersionSet 的 log files
+        if (ParseFileName(filenames[i], &number, &type))
+        {
             expected.erase(number);
             if (type == kLogFile && ((number >= min_log) || (number == prev_log)))
                 logs.push_back(number);
         }
     }
-    if (!expected.empty()) {
+
+    // 如果当前目录中的文件与 AddLiveFiles 文件不匹配, 则说明丢了文件
+    if (!expected.empty())
+    {
         char buf[50];
         std::snprintf(buf, sizeof(buf), "%d missing files; e.g.",
                     static_cast<int>(expected.size()));
         return Status::Corruption(buf, TableFileName(dbname_, *(expected.begin())));
     }
 
-  // Recover in the order in which the logs were generated
+    // 按照 log file 的生成顺序回放 Recover
     std::sort(logs.begin(), logs.end());
-    for (size_t i = 0; i < logs.size(); i++) {
-        s = RecoverLogFile(logs[i], (i == logs.size() - 1), save_manifest, edit,
-                        &max_sequence);
-        if (!s.ok()) {
-            return s;
-        }
+    for (size_t i = 0; i < logs.size(); i++)
+    {
+        s = RecoverLogFile(logs[i],
+                           (i == logs.size() - 1),
+                           save_manifest,
+                           edit,
+                           &max_sequence);
+        if (!s.ok()) return s;
 
-        // The previous incarnation may not have written any MANIFEST
-        // records after allocating this log number.  So we manually
-        // update the file number allocation counter in VersionSet.
+        // 之前的版本在分配这个 log number 后可能没有写任何 MANIFEST 记录
+        // 所以我们手动地更新 VersionSet 中的 file number allocation counter
         versions_->MarkFileNumberUsed(logs[i]);
     }
 
-    if (versions_->LastSequence() < max_sequence) {
+    // 更新醉的全局 sequence, 因为 log file 对应的 Memtable 还没有生成 SSTable
+    // 因此不会写到 MANIFEST
+    if (versions_->LastSequence() < max_sequence)
         versions_->SetLastSequence(max_sequence);
-    }
 
     return Status::OK();
 }
 
-Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
-                              bool* save_manifest, VersionEdit* edit,
-                              SequenceNumber* max_sequence) {
-  struct LogReporter : public log::Reader::Reporter {
-    Env* env;
-    Logger* info_log;
-    const char* fname;
-    Status* status;  // null if options_.paranoid_checks==false
-    void Corruption(size_t bytes, const Status& s) override {
-      Log(info_log, "%s%s: dropping %d bytes; %s",
-          (this->status == nullptr ? "(ignoring error) " : ""), fname,
-          static_cast<int>(bytes), s.ToString().c_str());
-      if (this->status != nullptr && this->status->ok()) *this->status = s;
-    }
-  };
+Status DBImpl::RecoverLogFile(uint64_t log_number,
+                              bool last_log,
+                              bool* save_manifest,
+                              VersionEdit* edit,
+                              SequenceNumber* max_sequence)
+{
+    struct LogReporter : public log::Reader::Reporter
+    {
+        Env* env;
+        Logger* info_log;
+        const char* fname;
+        Status* status;  // null if options_.paranoid_checks==false
+        void Corruption(size_t bytes, const Status& s) override
+        {
+            Log(info_log, "%s%s: dropping %d bytes; %s",
+                (this->status == nullptr ? "(ignoring error) " : ""), fname,
+                static_cast<int>(bytes), s.ToString().c_str());
+            if (this->status != nullptr && this->status->ok()) *this->status = s;
+        }
+    };
 
-  mutex_.AssertHeld();
+    mutex_.AssertHeld();
 
-  // Open the log file
-  std::string fname = LogFileName(dbname_, log_number);
-  SequentialFile* file;
-  Status status = env_->NewSequentialFile(fname, &file);
-  if (!status.ok()) {
-    MaybeIgnoreError(&status);
-    return status;
-  }
-
-  // Create the log reader.
-  LogReporter reporter;
-  reporter.env = env_;
-  reporter.info_log = options_.info_log;
-  reporter.fname = fname.c_str();
-  reporter.status = (options_.paranoid_checks ? &status : nullptr);
-  // We intentionally make log::Reader do checksumming even if
-  // paranoid_checks==false so that corruptions cause entire commits
-  // to be skipped instead of propagating bad information (like overly
-  // large sequence numbers).
-  log::Reader reader(file, &reporter, true /*checksum*/, 0 /*initial_offset*/);
-  Log(options_.info_log, "Recovering log #%llu",
-      (unsigned long long)log_number);
-
-  // Read all the records and add to a memtable
-  std::string scratch;
-  Slice record;
-  WriteBatch batch;
-  int compactions = 0;
-  MemTable* mem = nullptr;
-  while (reader.ReadRecord(&record, &scratch) && status.ok()) {
-    if (record.size() < 12) {
-      reporter.Corruption(record.size(),
-                          Status::Corruption("log record too small"));
-      continue;
-    }
-    WriteBatchInternal::SetContents(&batch, record);
-
-    if (mem == nullptr) {
-      mem = new MemTable(internal_comparator_);
-      mem->Ref();
-    }
-    status = WriteBatchInternal::InsertInto(&batch, mem);
-    MaybeIgnoreError(&status);
-    if (!status.ok()) {
-      break;
-    }
-    const SequenceNumber last_seq = WriteBatchInternal::Sequence(&batch) +
-                                    WriteBatchInternal::Count(&batch) - 1;
-    if (last_seq > *max_sequence) {
-      *max_sequence = last_seq;
+    // Open the log file
+    std::string fname = LogFileName(dbname_, log_number);
+    SequentialFile* file;
+    Status status = env_->NewSequentialFile(fname, &file);
+    if (!status.ok())
+    {
+        MaybeIgnoreError(&status);
+        return status;
     }
 
-    if (mem->ApproximateMemoryUsage() > options_.write_buffer_size) {
-      compactions++;
-      *save_manifest = true;
-      status = WriteLevel0Table(mem, edit, nullptr);
-      mem->Unref();
-      mem = nullptr;
-      if (!status.ok()) {
-        // Reflect errors immediately so that conditions like full
-        // file-systems cause the DB::Open() to fail.
-        break;
-      }
+    // Create the log reader.
+    LogReporter reporter;
+    reporter.env = env_;
+    reporter.info_log = options_.info_log;
+    reporter.fname = fname.c_str();
+    reporter.status = (options_.paranoid_checks ? &status : nullptr);
+    // We intentionally make log::Reader do checksumming even if
+    // paranoid_checks==false so that corruptions cause entire commits
+    // to be skipped instead of propagating bad information (like overly
+    // large sequence numbers).
+    // 这里有意让 log::Reader 进行校验, 即使 paranoid_checks==false
+    // 如果不进行校验, 则 corruptions 会导致整个 commits 被跳过,
+    // 而不是传播错误信息(如过大的 sequence numbers)
+    log::Reader reader(file, &reporter, true /*checksum*/, 0 /*initial_offset*/);
+    Log(options_.info_log, "Recovering log #%llu",
+        (unsigned long long)log_number);
+
+    // Read all the records and add to a memtable
+    std::string scratch;
+    Slice record;
+    WriteBatch batch;
+    int compactions = 0;
+    MemTable* mem = nullptr;
+    while (reader.ReadRecord(&record, &scratch) && status.ok())
+    {
+        if (record.size() < 12)
+        {
+            reporter.Corruption(record.size(), Status::Corruption("log record too small"));
+            continue;
+        }
+
+        WriteBatchInternal::SetContents(&batch, record);
+
+        if (mem == nullptr)
+        {
+            mem = new MemTable(internal_comparator_);
+            mem->Ref();
+        }
+
+        status = WriteBatchInternal::InsertInto(&batch, mem);
+        MaybeIgnoreError(&status);
+        if (!status.ok())
+        {
+            break;
+        }
+
+        const SequenceNumber last_seq = WriteBatchInternal::Sequence(&batch) +
+                                        WriteBatchInternal::Count(&batch) - 1;
+        if (last_seq > *max_sequence)
+        {
+            *max_sequence = last_seq;
+        }
+
+        if (mem->ApproximateMemoryUsage() > options_.write_buffer_size)
+        {
+            compactions++;
+            *save_manifest = true;
+            status = WriteLevel0Table(mem, edit, nullptr);
+            mem->Unref();
+            mem = nullptr;
+            if (!status.ok())
+            {
+                // Reflect errors immediately so that conditions like full
+                // file-systems cause the DB::Open() to fail.
+                break;
+            }
+        }
     }
-  }
 
   delete file;
 
@@ -1551,13 +1592,21 @@ Status DB::Delete(const WriteOptions& opt, const Slice& key) {
 
 DB::~DB() = default;
 
+/**
+ * 用于打开一个以 name 标识的 DB，调用者应该在不需要 DB 时 delete *dbptr
+ * @param options[IN], 
+ * @param name[IN], 要打开的 DB 的 name
+ * @param dbptr[OUT], 存储一个指向 heap-allocated DB 的指针
+ * @return 发生错误是会返回一个 non-OK status，并且 dbptr 会是一个 nullptr
+ */
 Status
-DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
+DB::Open(const Options& options, const std::string& dbname, DB** dbptr)
+{
     *dbptr = nullptr;
 
     DBImpl* impl = new DBImpl(options, dbname);
 
-    impl->mutex_.Lock();    // why need lock here?
+    impl->mutex_.Lock();
     VersionEdit edit;
     // Recover handles create_if_missing, error_if_exists
     bool save_manifest = false;
