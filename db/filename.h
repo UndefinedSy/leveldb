@@ -19,13 +19,13 @@ namespace leveldb {
 class Env;
 
 enum FileType {
-  kLogFile,
-  kDBLockFile,
-  kTableFile,
-  kDescriptorFile,
-  kCurrentFile,
-  kTempFile,
-  kInfoLogFile  // Either the current one, or an old one
+    kLogFile,       // WAL log file, 文件名为 [0-9]+.log
+    kDBLockFile,    // 文件名为 LOCK, 保证只有一个 leveldb 实例操作一个 db
+    kTableFile,     // SSTable file, 文件名为 [0-9]+.sst
+    kDescriptorFile,// db 的元数据文件, 文件名为 MANIFEST-[0-9]+
+    kCurrentFile,   // 用于记录当前的 MANIFEST 文件名, 其自身文件名为 CURRENT
+    kTempFile,      // db 在修复过程中产生的临时文件, 文件名为 [0-9]+.dbtmp
+    kInfoLogFile    // db 运行过程中的 log file, Either the current one, or an old one
 };
 
 // Return the name of the log file with the specified number

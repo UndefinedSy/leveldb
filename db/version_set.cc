@@ -1469,7 +1469,7 @@ VersionSet::ApproximateOffsetOf(Version* v, const InternalKey& ikey)
 /**
  * 将任何还未丢弃(即仍然有效)的 Version 中的 files 的 number 记录到 *live 中
  * 这可能会改变一些 internal state
- * @param live[OUT]
+ * @param live[OUT], 记录所有仍在 VersionSet 中的 filenum
  */
 void VersionSet::AddLiveFiles(std::set<uint64_t>* live)
 {

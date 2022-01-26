@@ -113,11 +113,10 @@ class LEVELDB_EXPORT Env {
   // Returns true iff the named file exists.
   virtual bool FileExists(const std::string& fname) = 0;
 
-  // Store in *result the names of the children of the specified directory.
-  // The names are relative to "dir".
-  // Original contents of *results are dropped.
-  virtual Status GetChildren(const std::string& dir,
-                             std::vector<std::string>* result) = 0;
+    // 在 *result 中存入指定目录的 children 的 name. 这些 name 作为 dir 的相对路径
+    // *results 的原来的内容将被删除
+    virtual Status GetChildren(const std::string& dir,
+                               std::vector<std::string>* result) = 0;
   // Delete the named file.
   //
   // The default implementation calls DeleteFile, to support legacy Env

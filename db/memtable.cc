@@ -115,7 +115,9 @@ MemTable::Add(SequenceNumber s, ValueType type,
 }
 
 /**
- * 
+ * 如果 Memtable 中包含传入 key 的 value, 将其存入 values 并返回 true
+ * 如果 Memtable 中包含传入 key 的 deletion, 在 status 中存入 NotFound() 并返回 true
+ * 否则返回 false
  * @param key[IN]
  * @param value[OUT]
  * @param s[OUT]

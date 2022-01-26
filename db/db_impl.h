@@ -108,13 +108,10 @@ private:
 
     Status NewDB();
 
-    // 从持久存储中恢复该 fd 的数据。这可能需要进行大量工作来恢复最近记录的更新。
-    // @param edit, 对这个 fd 所做的任何修改都会添加到 *edit。
     Status Recover(VersionEdit* edit, bool* save_manifest) EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
     void MaybeIgnoreError(Status* s) const;
 
-    // Delete any unneeded files and stale in-memory entries.
     void RemoveObsoleteFiles() EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
     // 将 in-memory write buffer 给 compact 到磁盘

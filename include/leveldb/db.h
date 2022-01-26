@@ -53,9 +53,11 @@ public:
 
 	virtual ~DB();
 
-	// Set the database entry for "key" to "value".
-	// Returns OK on success, and a non-OK status on error.
-	// Note: consider setting options.sync = true.
+	/**
+     * 设置数据库中的条目 “key” 对应值为 “value”
+     * 若成功返回 OK, 否则返回一个 non-OK
+     * 注意: 考虑设置 options.sync = true
+     */
 	virtual Status Put(const WriteOptions& options,
 					   const Slice& key, const Slice& value) = 0;
 
@@ -71,21 +73,18 @@ public:
 	// Note: consider setting options.sync = true.
 	virtual Status Write(const WriteOptions& options, WriteBatch* updates) = 0;
 
-	// If the database contains an entry for "key" store the
-	// corresponding value in *value and return OK.
-	//
-	// If there is no entry for "key" leave *value unchanged and return
-	// a status for which Status::IsNotFound() returns true.
-	//
-	// May return some other Status on an error.
-	// @param key[IN]
-	// @param value[OUT], 如果存在 key，则会在 value 中存入对应的 value
-	// 					  如果 key 不存在，则 *value 不会**修改**
-	// @return 当未发生错误，且 key 存在时返回 OK
-	// 		   当未发生错误，且 key 不存在时返回状态 Status::IsNotFound() 为 true
-	// 		   其他错误会有别的 Status
-	virtual Status Get(const ReadOptions& options,
-					   const Slice& key, std::string* value) = 0;
+    /**
+     * 尝试在 DB 中点查 Key
+     * @param options[IN]
+     * @param key[IN]
+     * @param value[OUT], 如果 key 存在，则会在 value 中存入对应的 value
+     *  				  如果 key 不存在，则 *value **不会被修改**
+     * @return 当未发发生错误，且 key 存在时返回 OK
+     * 		   当未发生错误，且 key 不存在时返回状态 Status::IsNotFound() 为 true
+     * 		   其他错误会有别的 Status
+     */
+	virtual Status Get(const ReadOptions& options, const Slice& key, 
+					   std::string* value) = 0;
 
 	// 获取一个用于遍历 DB 的 iterator，调用者应在不再使用时 delete iterator
 	// 在 DB 被删除之前应该先将返回的 iterator 删除。
