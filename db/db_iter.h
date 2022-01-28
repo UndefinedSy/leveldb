@@ -14,11 +14,14 @@ namespace leveldb {
 
 class DBImpl;
 
-// Return a new iterator that converts internal keys (yielded by
-// "*internal_iter") that were live at the specified "sequence" number
-// into appropriate user keys.
-Iterator* NewDBIterator(DBImpl* db, const Comparator* user_key_comparator,
-                        Iterator* internal_iter, SequenceNumber sequence,
+/**
+ * 返回一个新的 iterator, 该 iterator 将在指定的 sequence 上的
+ * internal keys (由 internal_iter 产生) 转换为适当的 user keys
+ */
+Iterator* NewDBIterator(DBImpl* db,
+                        const Comparator* user_key_comparator,
+                        Iterator* internal_iter,
+                        SequenceNumber sequence,
                         uint32_t seed);
 
 }  // namespace leveldb

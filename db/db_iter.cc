@@ -309,10 +309,23 @@ void DBIter::SeekToLast() {
 
 }  // anonymous namespace
 
-Iterator* NewDBIterator(DBImpl* db, const Comparator* user_key_comparator,
-                        Iterator* internal_iter, SequenceNumber sequence,
-                        uint32_t seed) {
-  return new DBIter(db, user_key_comparator, internal_iter, sequence, seed);
+/**
+ * 返回一个新的 iterator, 该 iterator 将在指定的 sequence 上的
+ * internal keys (由 internal_iter 产生) 转换为适当的 user keys
+ * @param db[IN]
+ * @param user_key_comparator[IN]
+ * @param iternal_iter[IN]
+ * @param sequence[IN]
+ * @param ssed[IN]
+ */
+Iterator*
+NewDBIterator(DBImpl* db,
+              const Comparator* user_key_comparator,
+              Iterator* internal_iter,
+              SequenceNumber sequence,
+              uint32_t seed)
+{
+    return new DBIter(db, user_key_comparator, internal_iter, sequence, seed);
 }
 
 }  // namespace leveldb

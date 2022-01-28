@@ -1170,52 +1170,73 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
 namespace {
 
 struct IterState {
-  port::Mutex* const mu;
-  Version* const version GUARDED_BY(mu);
-  MemTable* const mem GUARDED_BY(mu);
-  MemTable* const imm GUARDED_BY(mu);
+    port::Mutex* const mu;
+    Version* const version GUARDED_BY(mu);
+    MemTable* const mem GUARDED_BY(mu);
+    MemTable* const imm GUARDED_BY(mu);
 
-  IterState(port::Mutex* mutex, MemTable* mem, MemTable* imm, Version* version)
-      : mu(mutex), version(version), mem(mem), imm(imm) {}
+    IterState(port::Mutex* mutex, MemTable* mem, MemTable* imm, Version* version)
+        : mu(mutex)
+        , version(version)
+        , mem(mem)
+        , imm(imm)
+    {}
 };
 
-static void CleanupIteratorState(void* arg1, void* arg2) {
-  IterState* state = reinterpret_cast<IterState*>(arg1);
-  state->mu->Lock();
-  state->mem->Unref();
-  if (state->imm != nullptr) state->imm->Unref();
-  state->version->Unref();
-  state->mu->Unlock();
-  delete state;
+static void
+CleanupIteratorState(void* arg1, void* arg2)
+{
+    IterState* state = reinterpret_cast<IterState*>(arg1);
+    state->mu->Lock();
+
+    state->mem->Unref();
+    if (state->imm != nullptr) state->imm->Unref();
+    state->version->Unref();
+
+    state->mu->Unlock();
+    delete state;
 }
 
 }  // anonymous namespace
 
-Iterator* DBImpl::NewInternalIterator(const ReadOptions& options,
-                                      SequenceNumber* latest_snapshot,
-                                      uint32_t* seed) {
-  mutex_.Lock();
-  *latest_snapshot = versions_->LastSequence();
+/**
+ * 
+ * @param options[IN]
+ * @param latest_snapshot[OUT]
+ * @param seed[OUT]
+ */
+Iterator*
+DBImpl::NewInternalIterator(const ReadOptions& options,
+                            SequenceNumber* latest_snapshot,
+                            uint32_t* seed)
+{
+    mutex_.Lock();
 
-  // Collect together all needed child iterators
-  std::vector<Iterator*> list;
-  list.push_back(mem_->NewIterator());
-  mem_->Ref();
-  if (imm_ != nullptr) {
-    list.push_back(imm_->NewIterator());
-    imm_->Ref();
-  }
-  versions_->current()->AddIterators(options, &list);
-  Iterator* internal_iter =
-      NewMergingIterator(&internal_comparator_, &list[0], list.size());
-  versions_->current()->Ref();
+    *latest_snapshot = versions_->LastSequence();
 
-  IterState* cleanup = new IterState(&mutex_, mem_, imm_, versions_->current());
-  internal_iter->RegisterCleanup(CleanupIteratorState, cleanup, nullptr);
+    // Collect together all needed child iterators
+    std::vector<Iterator*> list;
+    // memtable 的 iterator
+    list.push_back(mem_->NewIterator());
+    mem_->Ref();
+    // immutable memtable 的 iterator
+    if (imm_ != nullptr) {
+        list.push_back(imm_->NewIterator());
+        imm_->Ref();
+    }
+    // current version 中各 level 的 file 上的 iterator
+    versions_->current()->AddIterators(options, &list);
+    // 将上面拿到的 mem, imm, sst iterators 聚合得到一个 merged iter
+    Iterator* internal_iter =
+        NewMergingIterator(&internal_comparator_, &list[0], list.size());
+    versions_->current()->Ref();
 
-  *seed = ++seed_;
-  mutex_.Unlock();
-  return internal_iter;
+    IterState* cleanup = new IterState(&mutex_, mem_, imm_, versions_->current());
+    internal_iter->RegisterCleanup(CleanupIteratorState, cleanup, nullptr);
+
+    *seed = ++seed_;
+    mutex_.Unlock();
+    return internal_iter;
 }
 
 Iterator* DBImpl::TEST_NewInternalIterator() {
@@ -1298,16 +1319,20 @@ DBImpl::Get(const ReadOptions& options, const Slice& key,
     return s;
 }
 
-Iterator* DBImpl::NewIterator(const ReadOptions& options) {
-  SequenceNumber latest_snapshot;
-  uint32_t seed;
-  Iterator* iter = NewInternalIterator(options, &latest_snapshot, &seed);
-  return NewDBIterator(this, user_comparator(), iter,
-                       (options.snapshot != nullptr
+Iterator*
+DBImpl::NewIterator(const ReadOptions& options)
+{
+    SequenceNumber latest_snapshot;
+    uint32_t seed;
+    Iterator* iter = NewInternalIterator(options, &latest_snapshot, &seed);
+    return NewDBIterator(this,
+                         user_comparator(),
+                         iter,
+                         (options.snapshot != nullptr
                             ? static_cast<const SnapshotImpl*>(options.snapshot)
                                   ->sequence_number()
                             : latest_snapshot),
-                       seed);
+                         seed);
 }
 
 void DBImpl::RecordReadSample(Slice key) {
@@ -1615,9 +1640,9 @@ void DBImpl::GetApproximateSizes(const Range* range, int n, uint64_t* sizes) {
 Status
 DB::Put(const WriteOptions& opt, const Slice& key, const Slice& value)
 {
-  WriteBatch batch;
-  batch.Put(key, value);
-  return Write(opt, &batch);
+    WriteBatch batch;
+    batch.Put(key, value);
+    return Write(opt, &batch);
 }
 
 Status DB::Delete(const WriteOptions& opt, const Slice& key) {

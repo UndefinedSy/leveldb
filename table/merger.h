@@ -18,6 +18,16 @@ class Iterator;
 // key is present in K child iterators, it will be yielded K times.
 //
 // REQUIRES: n >= 0
+/**
+ * 返回一个 iterator, 该 iterator 提供 children[0,n-1] 中数据的 union
+ * 这个 iterator 拥有子 iters 的所有权, 并在其自身被析构时会析构子 iterator
+ * 
+ * 所生成的 iterator 不会负责对数据做去重, 即如果一个 key 出现在 K 个子 iters 中, 则会得到其 K 次
+ * @param comparator[IN]
+ * @param children[IN]
+ * @param n[IN]
+ * 
+ */
 Iterator* NewMergingIterator(const Comparator* comparator, Iterator** children,
                              int n);
 

@@ -11,46 +11,51 @@
 namespace leveldb {
 
 namespace {
-class MergingIterator : public Iterator {
- public:
-  MergingIterator(const Comparator* comparator, Iterator** children, int n)
-      : comparator_(comparator),
-        children_(new IteratorWrapper[n]),
-        n_(n),
-        current_(nullptr),
-        direction_(kForward) {
-    for (int i = 0; i < n; i++) {
-      children_[i].Set(children[i]);
+class MergingIterator : public Iterator
+{
+public:
+    MergingIterator(const Comparator* comparator, Iterator** children, int n)
+        : comparator_(comparator)
+        , children_(new IteratorWrapper[n])
+        , n_(n)
+        , current_(nullptr)
+        , direction_(kForward)
+    {
+        for (int i = 0; i < n; i++) {
+            children_[i].Set(children[i]);
+        }
     }
-  }
 
-  ~MergingIterator() override { delete[] children_; }
+    ~MergingIterator() override { delete[] children_; }
 
-  bool Valid() const override { return (current_ != nullptr); }
+    bool Valid() const override { return (current_ != nullptr); }
 
-  void SeekToFirst() override {
-    for (int i = 0; i < n_; i++) {
-      children_[i].SeekToFirst();
+    void SeekToFirst() override
+    {
+        for (int i = 0; i < n_; i++) {
+            children_[i].SeekToFirst();
+        }
+        FindSmallest();
+        direction_ = kForward;
     }
-    FindSmallest();
-    direction_ = kForward;
-  }
 
-  void SeekToLast() override {
-    for (int i = 0; i < n_; i++) {
-      children_[i].SeekToLast();
+    void SeekToLast() override
+    {
+        for (int i = 0; i < n_; i++) {
+            children_[i].SeekToLast();
+        }
+        FindLargest();
+        direction_ = kReverse;
     }
-    FindLargest();
-    direction_ = kReverse;
-  }
 
-  void Seek(const Slice& target) override {
-    for (int i = 0; i < n_; i++) {
-      children_[i].Seek(target);
+    void Seek(const Slice& target) override
+    {
+        for (int i = 0; i < n_; i++) {
+            children_[i].Seek(target);
+        }
+        FindSmallest();
+        direction_ = kForward;
     }
-    FindSmallest();
-    direction_ = kForward;
-  }
 
   void Next() override {
     assert(Valid());
@@ -128,64 +133,96 @@ class MergingIterator : public Iterator {
     return status;
   }
 
- private:
-  // Which direction is the iterator moving?
-  enum Direction { kForward, kReverse };
+private:
+    // Which direction is the iterator moving?
+    enum Direction { kForward, kReverse };
 
-  void FindSmallest();
-  void FindLargest();
+    void FindSmallest();
+    void FindLargest();
 
-  // We might want to use a heap in case there are lots of children.
-  // For now we use a simple array since we expect a very small number
-  // of children in leveldb.
-  const Comparator* comparator_;
-  IteratorWrapper* children_;
-  int n_;
-  IteratorWrapper* current_;
-  Direction direction_;
+    const Comparator* comparator_;
+    // 当存在许多 children 时可能是用一个堆更合适
+    // 这里考虑到 leveldb 的 children 可能不会很多, 因此简单的使用了一个 array
+    IteratorWrapper* children_;
+    int n_;
+    IteratorWrapper* current_;
+    Direction direction_;
 };
 
-void MergingIterator::FindSmallest() {
-  IteratorWrapper* smallest = nullptr;
-  for (int i = 0; i < n_; i++) {
-    IteratorWrapper* child = &children_[i];
-    if (child->Valid()) {
-      if (smallest == nullptr) {
-        smallest = child;
-      } else if (comparator_->Compare(child->key(), smallest->key()) < 0) {
-        smallest = child;
-      }
+/**
+ * 遍历所有的 children iterator
+ * 寻找当前 entry 的 key 最小的 iterator 并 set 到 current_
+ */
+void MergingIterator::FindSmallest()
+{
+    IteratorWrapper* smallest = nullptr;
+    for (int i = 0; i < n_; i++)
+    {
+        IteratorWrapper* child = &children_[i];
+        if (child->Valid())
+        {
+            if (smallest == nullptr)
+            {
+                smallest = child;
+            }
+            else if (comparator_->Compare(child->key(), smallest->key()) < 0)
+            {
+                smallest = child;
+            }
+        }
     }
-  }
-  current_ = smallest;
+    current_ = smallest;
 }
 
-void MergingIterator::FindLargest() {
-  IteratorWrapper* largest = nullptr;
-  for (int i = n_ - 1; i >= 0; i--) {
-    IteratorWrapper* child = &children_[i];
-    if (child->Valid()) {
-      if (largest == nullptr) {
-        largest = child;
-      } else if (comparator_->Compare(child->key(), largest->key()) > 0) {
-        largest = child;
-      }
+/**
+ * 遍历所有的 children iterator
+ * 寻找当前 entry 的 key 最大的 iterator 并 set 到 current_
+ */
+void MergingIterator::FindLargest()
+{
+    IteratorWrapper* largest = nullptr;
+    for (int i = n_ - 1; i >= 0; i--)
+    {
+        IteratorWrapper* child = &children_[i];
+        if (child->Valid())
+        {
+            if (largest == nullptr)
+            {
+                largest = child;
+            }
+            else if (comparator_->Compare(child->key(), largest->key()) > 0)
+            {
+                largest = child;
+            }
+        }
     }
-  }
-  current_ = largest;
+    current_ = largest;
 }
 }  // namespace
 
-Iterator* NewMergingIterator(const Comparator* comparator, Iterator** children,
-                             int n) {
-  assert(n >= 0);
-  if (n == 0) {
-    return NewEmptyIterator();
-  } else if (n == 1) {
-    return children[0];
-  } else {
-    return new MergingIterator(comparator, children, n);
-  }
+/**
+ * 返回一个 iterator, 该 iterator 提供 children[0, n-1] 中数据的 union
+ * 这个 iterator 拥有子 iters 的所有权, 并在其自身被析构时会析构子 iterator
+ * 
+ * 所生成的 iterator 不会负责对数据做去重, 即如果一个 key 出现在 K 个子 iters 中, 则会得到其 K 次
+ * @param comparator[IN]
+ * @param children[IN]
+ * @param n[IN]
+ * @return 返回一个聚合的 Iterator
+ */
+Iterator*
+NewMergingIterator(const Comparator* comparator,
+                   Iterator** children,
+                   int n)
+{
+    assert(n >= 0);
+
+    if (n == 0)
+        return NewEmptyIterator();
+    else if (n == 1)
+        return children[0];
+    else
+        return new MergingIterator(comparator, children, n);
 }
 
 }  // namespace leveldb
