@@ -31,92 +31,94 @@ static void DumpInternalIter(Iterator* iter) {
 
 namespace {
 
-// Memtables and sstables that make the DB representation contain
-// (userkey,seq,type) => uservalue entries.  DBIter
-// combines multiple entries for the same userkey found in the DB
-// representation into a single entry while accounting for sequence
-// numbers, deletion markers, overwrites, etc.
-class DBIter : public Iterator {
- public:
-  // Which direction is the iterator currently moving?
-  // (1) When moving forward, the internal iterator is positioned at
-  //     the exact entry that yields this->key(), this->value()
-  // (2) When moving backwards, the internal iterator is positioned
-  //     just before all entries whose user key == this->key().
-  enum Direction { kForward, kReverse };
 
-  DBIter(DBImpl* db, const Comparator* cmp, Iterator* iter, SequenceNumber s,
-         uint32_t seed)
-      : db_(db),
-        user_comparator_(cmp),
-        iter_(iter),
-        sequence_(s),
-        direction_(kForward),
-        valid_(false),
-        rnd_(seed),
-        bytes_until_read_sampling_(RandomCompactionPeriod()) {}
+// Memtables 和 SSTables 构成了包含有 (userkey,seq,type) => uservalue 的 DB representation
+// DBIter 将 DB representation 中找到的, 对于同一个 userkey 的多个 entries 合并为一个 entry
+// DBIter 需要负责考虑 sequence numbers, deletion markers, overwrtes 等情况.
+class DBIter : public Iterator
+{
+public:
+    // 描述了当前 iterator 的移动方向
+    // (1) 当方向为 kForward 时, internal iterator 指向生成
+    //     this->key(), this->value() 的 entry
+    // (2) 当方向为 kReverse 时, internal iterator 指向所有的
+    //     user key == this->key() 的 entry 之前的位置
+    enum Direction { kForward, kReverse };
 
-  DBIter(const DBIter&) = delete;
-  DBIter& operator=(const DBIter&) = delete;
+    DBIter(const DBIter&) = delete;
+    DBIter& operator=(const DBIter&) = delete;
 
-  ~DBIter() override { delete iter_; }
-  bool Valid() const override { return valid_; }
-  Slice key() const override {
-    assert(valid_);
-    return (direction_ == kForward) ? ExtractUserKey(iter_->key()) : saved_key_;
-  }
-  Slice value() const override {
-    assert(valid_);
-    return (direction_ == kForward) ? iter_->value() : saved_value_;
-  }
-  Status status() const override {
-    if (status_.ok()) {
-      return iter_->status();
-    } else {
-      return status_;
+    DBIter(DBImpl* db, const Comparator* cmp,
+           Iterator* iter, SequenceNumber s, uint32_t seed)
+      : db_(db)
+      , user_comparator_(cmp)
+      , iter_(iter)
+      , sequence_(s)
+      , direction_(kForward)
+      , valid_(false)
+      , rnd_(seed)
+      , bytes_until_read_sampling_(RandomCompactionPeriod())
+      {}
+
+    ~DBIter() override { delete iter_; }
+
+    bool Valid() const override { return valid_; }
+    Slice key() const override {
+        assert(valid_);
+        return (direction_ == kForward) ? ExtractUserKey(iter_->key()) : saved_key_;
     }
-  }
-
-  void Next() override;
-  void Prev() override;
-  void Seek(const Slice& target) override;
-  void SeekToFirst() override;
-  void SeekToLast() override;
-
- private:
-  void FindNextUserEntry(bool skipping, std::string* skip);
-  void FindPrevUserEntry();
-  bool ParseKey(ParsedInternalKey* key);
-
-  inline void SaveKey(const Slice& k, std::string* dst) {
-    dst->assign(k.data(), k.size());
-  }
-
-  inline void ClearSavedValue() {
-    if (saved_value_.capacity() > 1048576) {
-      std::string empty;
-      swap(empty, saved_value_);
-    } else {
-      saved_value_.clear();
+    Slice value() const override {
+        assert(valid_);
+        return (direction_ == kForward) ? iter_->value() : saved_value_;
     }
-  }
+    Status status() const override {
+        if (status_.ok()) {
+        return iter_->status();
+        } else {
+        return status_;
+        }
+    }
 
-  // Picks the number of bytes that can be read until a compaction is scheduled.
-  size_t RandomCompactionPeriod() {
-    return rnd_.Uniform(2 * config::kReadBytesPeriod);
-  }
+    void Next() override;
+    void Prev() override;
+    void Seek(const Slice& target) override;
+    void SeekToFirst() override;
+    void SeekToLast() override;
 
-  DBImpl* db_;
-  const Comparator* const user_comparator_;
-  Iterator* const iter_;
-  SequenceNumber const sequence_;
-  Status status_;
-  std::string saved_key_;    // == current key when direction_==kReverse
-  std::string saved_value_;  // == current raw value when direction_==kReverse
-  Direction direction_;
-  bool valid_;
-  Random rnd_;
-  size_t bytes_until_read_sampling_;
+private:
+    void FindNextUserEntry(bool skipping, std::string* skip);
+    void FindPrevUserEntry();
+    bool ParseKey(ParsedInternalKey* key);
+
+    inline void SaveKey(const Slice& k, std::string* dst) {
+        dst->assign(k.data(), k.size());
+    }
+
+    inline void ClearSavedValue() {
+        if (saved_value_.capacity() > 1048576) {
+        std::string empty;
+        swap(empty, saved_value_);
+        } else {
+        saved_value_.clear();
+        }
+    }
+
+    // Picks the number of bytes that can be read until a compaction is scheduled.
+    size_t RandomCompactionPeriod() {
+        return rnd_.Uniform(2 * config::kReadBytesPeriod);
+    }
+
+    DBImpl* db_;
+    const Comparator* const user_comparator_;
+    Iterator* const iter_;
+    SequenceNumber const sequence_;
+    Status status_;
+    std::string saved_key_;    // == current key when direction_==kReverse
+    std::string saved_value_;  // == current raw value when direction_==kReverse
+    Direction direction_;
+    bool valid_;
+    Random rnd_;
+    size_t bytes_until_read_sampling_;
 };
 
 inline bool DBIter::ParseKey(ParsedInternalKey* ikey) {

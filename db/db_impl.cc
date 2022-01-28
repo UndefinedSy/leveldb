@@ -1200,10 +1200,13 @@ CleanupIteratorState(void* arg1, void* arg2)
 }  // anonymous namespace
 
 /**
- * 
+ * 返回一个 merged iterator, 该 iter 由以下的 iter 构成:
+ * - mem
+ * - imm
+ * - current version 中的所有 sst files
  * @param options[IN]
- * @param latest_snapshot[OUT]
- * @param seed[OUT]
+ * @param latest_snapshot[OUT] 最新的 snapshot 的 number?
+ * @param seed[OUT] TODO
  */
 Iterator*
 DBImpl::NewInternalIterator(const ReadOptions& options,

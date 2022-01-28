@@ -28,8 +28,11 @@ public:
 
     ~MergingIterator() override { delete[] children_; }
 
+    // check 当前 current 所指向的 iter 是否有效
     bool Valid() const override { return (current_ != nullptr); }
 
+    // 先将每个 iter 置到 head
+    // 然后找所有 iter 中最小的置为 current
     void SeekToFirst() override
     {
         for (int i = 0; i < n_; i++) {
@@ -39,6 +42,8 @@ public:
         direction_ = kForward;
     }
 
+    // 先将每个 iter 置到 tail
+    // 然后找所有 iter 中最大的置为 current
     void SeekToLast() override
     {
         for (int i = 0; i < n_; i++) {
@@ -48,6 +53,8 @@ public:
         direction_ = kReverse;
     }
 
+    // 先将每个 iter 定位到 >= target 的第一个位置
+    // 然后找所有 iter 中最小的置为 current
     void Seek(const Slice& target) override
     {
         for (int i = 0; i < n_; i++) {
@@ -57,81 +64,103 @@ public:
         direction_ = kForward;
     }
 
-  void Next() override {
-    assert(Valid());
+    // 将所有子 iter 都移动到 current_->key() 之后的位置
+    // 然后将所有 iter 中最小的一个置为 current_
+    void Next() override
+    {
+        assert(Valid());
 
-    // Ensure that all children are positioned after key().
-    // If we are moving in the forward direction, it is already
-    // true for all of the non-current_ children since current_ is
-    // the smallest child and key() == current_->key().  Otherwise,
-    // we explicitly position the non-current_ children.
-    if (direction_ != kForward) {
-      for (int i = 0; i < n_; i++) {
-        IteratorWrapper* child = &children_[i];
-        if (child != current_) {
-          child->Seek(key());
-          if (child->Valid() &&
-              comparator_->Compare(key(), child->key()) == 0) {
-            child->Next();
-          }
+        // 确保所有的子 iters 都在 key() 之后的位置
+        // - 如果当前是 kForward 的方向, 
+        //   那么对于所有 non-current_ 的子 iter 来说上述前提成立,
+        //   因为 current_ 是当前最小的 iter, 且 key() == current_->key()
+        // - 如果当前是 kReverse 的方向,
+        //   则我们需要显式地去定位那些 non-current_ 的子 iters
+        //   并将其方向设置为 kForward
+        if (direction_ != kForward)
+        {
+            for (int i = 0; i < n_; i++)
+            {
+                IteratorWrapper* child = &children_[i];
+                if (child != current_)
+                {
+                    child->Seek(key());
+                    if (child->Valid()
+                        && comparator_->Compare(key(), child->key()) == 0)
+                    {
+                        child->Next();
+                    }
+                }
+            }
+            direction_ = kForward;
         }
-      }
-      direction_ = kForward;
+
+        current_->Next();
+        FindSmallest();
     }
 
-    current_->Next();
-    FindSmallest();
-  }
+    void Prev() override
+    {
+        assert(Valid());
 
-  void Prev() override {
-    assert(Valid());
-
-    // Ensure that all children are positioned before key().
-    // If we are moving in the reverse direction, it is already
-    // true for all of the non-current_ children since current_ is
-    // the largest child and key() == current_->key().  Otherwise,
-    // we explicitly position the non-current_ children.
-    if (direction_ != kReverse) {
-      for (int i = 0; i < n_; i++) {
-        IteratorWrapper* child = &children_[i];
-        if (child != current_) {
-          child->Seek(key());
-          if (child->Valid()) {
-            // Child is at first entry >= key().  Step back one to be < key()
-            child->Prev();
-          } else {
-            // Child has no entries >= key().  Position at last entry.
-            child->SeekToLast();
-          }
+        // 确保所有的子 iters 都在 key() 之前的位置
+        // - 如果当前是 kReverse 的方向, 
+        //   那么对于所有 non-current_ 的子 iter 来说上述前提成立,
+        //   因为 current_ 是当前最大的 iter, 且 key() == current_->key()
+        // - 如果当前是 kForward 的方向,
+        //   则我们需要显式地去定位那些 non-current_ 的子 iters
+        //   并将方向设置为 kReverse
+        if (direction_ != kReverse)
+        {
+            for (int i = 0; i < n_; i++)
+            {
+                IteratorWrapper* child = &children_[i];
+                if (child != current_) {
+                    child->Seek(key());
+                    if (child->Valid())
+                    {
+                        // 当前 iter 位于第一个 >= key() 的位置
+                        // 进行一个 Prev() 使得回退到 < key()
+                        child->Prev();
+                    }
+                    else
+                    {
+                        // 当前 iter 中没有 >= key() 的数据
+                        // 置到 last entry
+                        child->SeekToLast();
+                    }
+                }
+            }
+            direction_ = kReverse;
         }
-      }
-      direction_ = kReverse;
+
+        current_->Prev();
+        FindLargest();
     }
 
-    current_->Prev();
-    FindLargest();
-  }
-
-  Slice key() const override {
-    assert(Valid());
-    return current_->key();
-  }
-
-  Slice value() const override {
-    assert(Valid());
-    return current_->value();
-  }
-
-  Status status() const override {
-    Status status;
-    for (int i = 0; i < n_; i++) {
-      status = children_[i].status();
-      if (!status.ok()) {
-        break;
-      }
+    Slice key() const override {
+        assert(Valid());
+        return current_->key();
     }
-    return status;
-  }
+
+    Slice value() const override {
+        assert(Valid());
+        return current_->value();
+    }
+
+    // check 所有子 iter 的状态, 如果有一个处于 non-OK 则返回
+    Status status() const override
+    {
+        Status status;
+        for (int i = 0; i < n_; i++)
+        {
+            status = children_[i].status();
+            if (!status.ok()) {
+                break;
+            }
+        }
+        return status;
+    }
 
 private:
     // Which direction is the iterator moving?
