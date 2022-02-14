@@ -1338,11 +1338,12 @@ DBImpl::NewIterator(const ReadOptions& options)
                          seed);
 }
 
-void DBImpl::RecordReadSample(Slice key) {
-  MutexLock l(&mutex_);
-  if (versions_->current()->RecordReadSample(key)) {
-    MaybeScheduleCompaction();
-  }
+void DBImpl::RecordReadSample(Slice key)
+{
+    MutexLock l(&mutex_);
+  
+    if (versions_->current()->RecordReadSample(key))
+        MaybeScheduleCompaction();
 }
 
 const Snapshot* DBImpl::GetSnapshot() {

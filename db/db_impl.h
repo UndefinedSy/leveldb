@@ -67,10 +67,12 @@ public:
   // file at a level >= 1.
   int64_t TEST_MaxNextLevelOverlappingBytes();
 
-  // Record a sample of bytes read at the specified internal key.
-  // Samples are taken approximately once every config::kReadBytesPeriod
-  // bytes.
-  void RecordReadSample(Slice key);
+    // Record a sample of bytes read at the specified internal key.
+    // Samples are taken approximately once every config::kReadBytesPeriod
+    // bytes.
+    // 记录在指定的 internal key 处读到的数据采样样本
+    // 约在每 config::kReadBytesPeriod 字节处采样一次
+    void RecordReadSample(Slice key);
 
 private:
     friend class DB;

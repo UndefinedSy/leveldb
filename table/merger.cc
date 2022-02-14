@@ -180,7 +180,7 @@ private:
 
 /**
  * 遍历所有的 children iterator
- * 寻找当前 entry 的 key 最小的 iterator 并 set 到 current_
+ * 寻找当前 entry 的 user key 最小的 iterator 并 set 到 current_
  */
 void MergingIterator::FindSmallest()
 {
@@ -205,7 +205,7 @@ void MergingIterator::FindSmallest()
 
 /**
  * 遍历所有的 children iterator
- * 寻找当前 entry 的 key 最大的 iterator 并 set 到 current_
+ * 寻找当前 entry 的 user key 最大的 iterator 并 set 到 current_
  */
 void MergingIterator::FindLargest()
 {
