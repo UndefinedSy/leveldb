@@ -40,15 +40,19 @@ namespace leveldb {
 const int kNumNonTableCacheFiles = 10;
 
 // Information kept for every waiting writer
-struct DBImpl::Writer {
-  explicit Writer(port::Mutex* mu)
-      : batch(nullptr), sync(false), done(false), cv(mu) {}
+struct DBImpl::Writer
+{
+    explicit Writer(port::Mutex* mu)
+        : batch(nullptr)
+        , sync(false)
+        , done(false)
+        , cv(mu) {}
 
-  Status status;
-  WriteBatch* batch;
-  bool sync;
-  bool done;
-  port::CondVar cv;
+    Status status;
+    WriteBatch* batch;
+    bool sync;
+    bool done;
+    port::CondVar cv;
 };
 
 struct DBImpl::CompactionState {
@@ -653,94 +657,135 @@ void DBImpl::CompactMemTable()
         s = Status::IOError("Deleting DB during memtable compaction");
     }
 
-  // Replace immutable memtable with the generated Table
-  if (s.ok()) {
-    edit.SetPrevLogNumber(0);
-    edit.SetLogNumber(logfile_number_);  // Earlier logs no longer needed
-    s = versions_->LogAndApply(&edit, &mutex_);
-  }
+    // Replace immutable memtable with the generated Table
+    // 写到 MANIFEST, 表示 minor compaction 完成?
+    if (s.ok())
+    {
+        edit.SetPrevLogNumber(0);
+        edit.SetLogNumber(logfile_number_);  // Earlier logs no longer needed
+        s = versions_->LogAndApply(&edit, &mutex_);
+    }
 
-  if (s.ok()) {
-    // Commit to the new state
-    imm_->Unref();
-    imm_ = nullptr;
-    has_imm_.store(false, std::memory_order_release);
-    RemoveObsoleteFiles();
-  } else {
-    RecordBackgroundError(s);
-  }
+    // immutable memtable 的清理
+    if (s.ok())
+    {
+        // Commit to the new state
+        imm_->Unref();
+        imm_ = nullptr;
+        has_imm_.store(false, std::memory_order_release);
+        RemoveObsoleteFiles();
+    }
+    else
+    {
+        RecordBackgroundError(s);
+    }
 }
 
-void DBImpl::CompactRange(const Slice* begin, const Slice* end) {
-  int max_level_with_files = 1;
-  {
+void DBImpl::CompactRange(const Slice* begin, const Slice* end)
+{
+    int max_level_with_files = 1;
+    {
+        // 在 current version 中寻找与传入 range 有重叠的最大 level
+        MutexLock l(&mutex_);
+        Version* base = versions_->current();
+        for (int level = 1; level < config::kNumLevels; level++)
+        {
+            if (base->OverlapInLevel(level, begin, end))
+            {
+                max_level_with_files = level;
+            }
+        }
+    }
+
+    // 先强制将 memtable 进行 minor compaction, 然后逐层尝试 major compaction
+    TEST_CompactMemTable();  // TODO(sanjay): Skip if memtable does not overlap
+    for (int level = 0; level < max_level_with_files; level++)
+    {
+        TEST_CompactRange(level, begin, end);
+    }
+}
+
+/**
+ * @brief Compact any files in the named level that overlap [*begin,*end]
+ * 
+ * @param level 
+ * @param begin 
+ * @param end 
+ */
+void DBImpl::TEST_CompactRange(int level, const Slice* begin, const Slice* end)
+{
+    assert(level >= 0);
+    assert(level + 1 < config::kNumLevels);
+
+    InternalKey begin_storage, end_storage;
+
+    ManualCompaction manual;
+    manual.level = level;
+    manual.done = false;
+    
+    if (begin == nullptr)
+    {
+        manual.begin = nullptr;
+    }
+    else
+    {
+        begin_storage = InternalKey(*begin, kMaxSequenceNumber, kValueTypeForSeek);
+        manual.begin = &begin_storage;
+    }
+    
+    if (end == nullptr)
+    {
+        manual.end = nullptr;
+    }
+    else
+    {
+        end_storage = InternalKey(*end, 0, static_cast<ValueType>(0));
+        manual.end = &end_storage;
+    }
+
     MutexLock l(&mutex_);
-    Version* base = versions_->current();
-    for (int level = 1; level < config::kNumLevels; level++) {
-      if (base->OverlapInLevel(level, begin, end)) {
-        max_level_with_files = level;
-      }
+    while (!manual.done
+           && !shutting_down_.load(std::memory_order_acquire)
+           && bg_error_.ok())
+    {
+        if (manual_compaction_ == nullptr)
+        {
+            // 当前 manual compaction 处于 Idle 状态
+            manual_compaction_ = &manual;
+            MaybeScheduleCompaction();
+        }
+        else
+        {
+            // 当前 manual compaction 正在进行
+            background_work_finished_signal_.Wait();
+        }
     }
-  }
-  TEST_CompactMemTable();  // TODO(sanjay): Skip if memtable does not overlap
-  for (int level = 0; level < max_level_with_files; level++) {
-    TEST_CompactRange(level, begin, end);
-  }
+
+    if (manual_compaction_ == &manual) {
+        // Cancel my manual compaction since we aborted early for some reason.
+        manual_compaction_ = nullptr;
+    }
 }
 
-void DBImpl::TEST_CompactRange(int level, const Slice* begin,
-                               const Slice* end) {
-  assert(level >= 0);
-  assert(level + 1 < config::kNumLevels);
+/**
+ * @brief 强制触发当前的 memtable contents 进行 minor compaction
+ */
+Status DBImpl::TEST_CompactMemTable()
+{
+    // WriteBatch 置 nullptr 用于等待之前的 writes 完成
+    Status s = Write(WriteOptions(), nullptr);
+    if (s.ok())
+    {
+        // Wait until the compaction completes
+        MutexLock l(&mutex_);
+        while (imm_ != nullptr && bg_error_.ok())
+        {
+            background_work_finished_signal_.Wait();
+        }
 
-  InternalKey begin_storage, end_storage;
-
-  ManualCompaction manual;
-  manual.level = level;
-  manual.done = false;
-  if (begin == nullptr) {
-    manual.begin = nullptr;
-  } else {
-    begin_storage = InternalKey(*begin, kMaxSequenceNumber, kValueTypeForSeek);
-    manual.begin = &begin_storage;
-  }
-  if (end == nullptr) {
-    manual.end = nullptr;
-  } else {
-    end_storage = InternalKey(*end, 0, static_cast<ValueType>(0));
-    manual.end = &end_storage;
-  }
-
-  MutexLock l(&mutex_);
-  while (!manual.done && !shutting_down_.load(std::memory_order_acquire) &&
-         bg_error_.ok()) {
-    if (manual_compaction_ == nullptr) {  // Idle
-      manual_compaction_ = &manual;
-      MaybeScheduleCompaction();
-    } else {  // Running either my compaction or another compaction.
-      background_work_finished_signal_.Wait();
+        if (imm_ != nullptr) s = bg_error_;
     }
-  }
-  if (manual_compaction_ == &manual) {
-    // Cancel my manual compaction since we aborted early for some reason.
-    manual_compaction_ = nullptr;
-  }
-}
-
-Status DBImpl::TEST_CompactMemTable() {
-  // nullptr batch means just wait for earlier writes to be done
-  Status s = Write(WriteOptions(), nullptr);
-  if (s.ok()) {
-    // Wait until the compaction completes
-    MutexLock l(&mutex_);
-    while (imm_ != nullptr && bg_error_.ok()) {
-      background_work_finished_signal_.Wait();
-    }
-    if (imm_ != nullptr) {
-      s = bg_error_;
-    }
-  }
-  return s;
+    return s;
 }
 
 void DBImpl::RecordBackgroundError(const Status& s) {
@@ -816,176 +861,246 @@ void DBImpl::BackgroundCall()
     background_work_finished_signal_.SignalAll();
 }
 
-void DBImpl::BackgroundCompaction() {
-  mutex_.AssertHeld();
+/**
+ * @brief 用户实际发起一次 Compaction
+ * Compaction 存在有以下的优先级:
+ * 1. Minor Compaction -- imm_ != nullptr
+ * 2. Manual Compaction -- manual_compaction_ != nullptr
+ * 3. 基于 Size 的 Major Compaction --┐
+ * 4. 基于 Seek 的 Major Compaction --+-- PickCompaction != nullptr
+ * 
+ * 
+ */
+void DBImpl::BackgroundCompaction()
+{
+    mutex_.AssertHeld();
 
-  if (imm_ != nullptr) {
-    CompactMemTable();
-    return;
-  }
+    // 存在有 immutable memtable 时会进行 minor compaction
+    if (imm_ != nullptr)
+    {
+        CompactMemTable();
+        return;
+    }
 
-  Compaction* c;
-  bool is_manual = (manual_compaction_ != nullptr);
-  InternalKey manual_end;
-  if (is_manual) {
-    ManualCompaction* m = manual_compaction_;
-    c = versions_->CompactRange(m->level, m->begin, m->end);
-    m->done = (c == nullptr);
-    if (c != nullptr) {
-      manual_end = c->input(0, c->num_input_files(0) - 1)->largest;
+    Compaction* c;
+    bool is_manual = (manual_compaction_ != nullptr);
+    InternalKey manual_end;
+    if (is_manual)
+    {
+        ManualCompaction* m = manual_compaction_;
+        c = versions_->CompactRange(m->level, m->begin, m->end);
+        m->done = (c == nullptr);
+        if (c != nullptr)
+        {
+            manual_end = c->input(0, c->num_input_files(0) - 1)->largest;
+        }
+        Log(options_.info_log,
+            "Manual compaction at level-%d from %s .. %s; will stop at %s\n",
+            m->level,
+            (m->begin ? m->begin->DebugString().c_str() : "(begin)"),
+            (m->end ? m->end->DebugString().c_str() : "(end)"),
+            (m->done ? "(end)" : manual_end.DebugString().c_str()));
     }
-    Log(options_.info_log,
-        "Manual compaction at level-%d from %s .. %s; will stop at %s\n",
-        m->level, (m->begin ? m->begin->DebugString().c_str() : "(begin)"),
-        (m->end ? m->end->DebugString().c_str() : "(end)"),
-        (m->done ? "(end)" : manual_end.DebugString().c_str()));
-  } else {
-    c = versions_->PickCompaction();
-  }
+    else
+    {
+        c = versions_->PickCompaction();
+    }
 
-  Status status;
-  if (c == nullptr) {
-    // Nothing to do
-  } else if (!is_manual && c->IsTrivialMove()) {
-    // Move file to next level
-    assert(c->num_input_files(0) == 1);
-    FileMetaData* f = c->input(0, 0);
-    c->edit()->RemoveFile(c->level(), f->number);
-    c->edit()->AddFile(c->level() + 1, f->number, f->file_size, f->smallest,
-                       f->largest);
-    status = versions_->LogAndApply(c->edit(), &mutex_);
-    if (!status.ok()) {
-      RecordBackgroundError(status);
+    Status status;
+    if (c == nullptr)
+    {
+        // Nothing to do
     }
-    VersionSet::LevelSummaryStorage tmp;
-    Log(options_.info_log, "Moved #%lld to level-%d %lld bytes %s: %s\n",
-        static_cast<unsigned long long>(f->number), c->level() + 1,
-        static_cast<unsigned long long>(f->file_size),
-        status.ToString().c_str(), versions_->LevelSummary(&tmp));
-  } else {
-    CompactionState* compact = new CompactionState(c);
-    status = DoCompactionWork(compact);
-    if (!status.ok()) {
-      RecordBackgroundError(status);
-    }
-    CleanupCompaction(compact);
-    c->ReleaseInputs();
-    RemoveObsoleteFiles();
-  }
-  delete c;
+    else if (!is_manual && c->IsTrivialMove())
+    {
+        assert(c->num_input_files(0) == 1);
 
-  if (status.ok()) {
-    // Done
-  } else if (shutting_down_.load(std::memory_order_acquire)) {
-    // Ignore compaction errors found during shutting down
-  } else {
-    Log(options_.info_log, "Compaction error: %s", status.ToString().c_str());
-  }
+        // Move file to next level
+        FileMetaData* f = c->input(0, 0);
+        c->edit()->RemoveFile(c->level(), f->number);
+        c->edit()->AddFile(c->level() + 1, f->number, f->file_size,
+                           f->smallest, f->largest);
+        status = versions_->LogAndApply(c->edit(), &mutex_);
+        if (!status.ok())
+        {
+            RecordBackgroundError(status);
+        }
+        VersionSet::LevelSummaryStorage tmp;
+        Log(options_.info_log, "Moved #%lld to level-%d %lld bytes %s: %s\n",
+            static_cast<unsigned long long>(f->number), c->level() + 1,
+            static_cast<unsigned long long>(f->file_size),
+            status.ToString().c_str(), versions_->LevelSummary(&tmp));
+    }
+    else
+    {
+        // do major compaction
+        CompactionState* compact = new CompactionState(c);
+        status = DoCompactionWork(compact);
+        if (!status.ok())
+        {
+            RecordBackgroundError(status);
+        }
+        CleanupCompaction(compact);
+        c->ReleaseInputs();
+        RemoveObsoleteFiles();
+    }
+    delete c;
 
-  if (is_manual) {
-    ManualCompaction* m = manual_compaction_;
-    if (!status.ok()) {
-      m->done = true;
+    if (status.ok())
+    {
+        // Done
     }
-    if (!m->done) {
-      // We only compacted part of the requested range.  Update *m
-      // to the range that is left to be compacted.
-      m->tmp_storage = manual_end;
-      m->begin = &m->tmp_storage;
+    else if (shutting_down_.load(std::memory_order_acquire))
+    {
+        // Ignore compaction errors found during shutting down
     }
-    manual_compaction_ = nullptr;
-  }
+    else
+    {
+        Log(options_.info_log, "Compaction error: %s", status.ToString().c_str());
+    }
+
+    if (is_manual)
+    {
+        ManualCompaction* m = manual_compaction_;
+        if (!status.ok())
+        {
+            m->done = true; // done 为 true 表示 manual compaction 出现 error? (TODO)
+        }
+
+        if (!m->done)
+        {
+            // 只 compact 了请求 range 的一个部分
+            // 更新 *m 为之后要做 compact 的 range
+            m->tmp_storage = manual_end;
+            m->begin = &m->tmp_storage;
+        }
+        manual_compaction_ = nullptr;
+    }
 }
 
-void DBImpl::CleanupCompaction(CompactionState* compact) {
-  mutex_.AssertHeld();
-  if (compact->builder != nullptr) {
-    // May happen if we get a shutdown call in the middle of compaction
-    compact->builder->Abandon();
+void DBImpl::CleanupCompaction(CompactionState* compact)
+{
+    mutex_.AssertHeld();
+
+    if (compact->builder != nullptr)
+    {
+        // May happen if we get a shutdown call in the middle of compaction
+        compact->builder->Abandon();
+        delete compact->builder;
+    }
+    else
+    {
+        assert(compact->outfile == nullptr);
+    }
+    delete compact->outfile;
+    for (size_t i = 0; i < compact->outputs.size(); i++)
+    {
+        const CompactionState::Output& out = compact->outputs[i];
+        pending_outputs_.erase(out.number);
+    }
+    delete compact;
+}
+
+/**
+ * @brief 创建新的 output SST file, 并设置 compact->builder
+ */
+Status DBImpl::OpenCompactionOutputFile(CompactionState* compact)
+{
+    assert(compact != nullptr);
+    assert(compact->builder == nullptr);
+
+    uint64_t file_number;
+    {
+        mutex_.Lock();
+        file_number = versions_->NewFileNumber();
+        pending_outputs_.insert(file_number);
+        CompactionState::Output out;
+        out.number = file_number;
+        out.smallest.Clear();
+        out.largest.Clear();
+        compact->outputs.push_back(out);
+        mutex_.Unlock();
+    }
+
+    // Make the output file
+    std::string fname = TableFileName(dbname_, file_number);
+    Status s = env_->NewWritableFile(fname, &compact->outfile);
+    if (s.ok())
+    {
+        compact->builder = new TableBuilder(options_, compact->outfile);
+    }
+    return s;
+}
+
+/**
+ * @brief TODO
+ * 
+ * (因为LevelDB限制了每个SSTable的大小，因此在Major Compaction期间，
+ *  如果当前写入的SSTable过大，会将其拆分成多个SSTable写入，
+ * 所以这里关闭的是最后一个SSTable。
+ * 该方法主要通过SSTable的Builder的Finish方法完成对SSTable的写入，
+ * 这里不再赘述，感兴趣的读者可以自行阅读。)
+ * 
+ * @param compact 
+ * @param input 
+ * @return Status 
+ */
+Status
+DBImpl::FinishCompactionOutputFile(CompactionState* compact,
+                                   Iterator* input)
+{
+    assert(compact != nullptr);
+    assert(compact->outfile != nullptr);
+    assert(compact->builder != nullptr);
+
+    const uint64_t output_number = compact->current_output()->number;
+    assert(output_number != 0);
+
+    // Check for iterator errors
+    Status s = input->status();
+    const uint64_t current_entries = compact->builder->NumEntries();
+    if (s.ok())
+    {
+        s = compact->builder->Finish();
+    }
+    else
+    {
+        compact->builder->Abandon();
+    }
+    const uint64_t current_bytes = compact->builder->FileSize();
+    compact->current_output()->file_size = current_bytes;
+    compact->total_bytes += current_bytes;
     delete compact->builder;
-  } else {
-    assert(compact->outfile == nullptr);
-  }
-  delete compact->outfile;
-  for (size_t i = 0; i < compact->outputs.size(); i++) {
-    const CompactionState::Output& out = compact->outputs[i];
-    pending_outputs_.erase(out.number);
-  }
-  delete compact;
-}
+    compact->builder = nullptr;
 
-Status DBImpl::OpenCompactionOutputFile(CompactionState* compact) {
-  assert(compact != nullptr);
-  assert(compact->builder == nullptr);
-  uint64_t file_number;
-  {
-    mutex_.Lock();
-    file_number = versions_->NewFileNumber();
-    pending_outputs_.insert(file_number);
-    CompactionState::Output out;
-    out.number = file_number;
-    out.smallest.Clear();
-    out.largest.Clear();
-    compact->outputs.push_back(out);
-    mutex_.Unlock();
-  }
-
-  // Make the output file
-  std::string fname = TableFileName(dbname_, file_number);
-  Status s = env_->NewWritableFile(fname, &compact->outfile);
-  if (s.ok()) {
-    compact->builder = new TableBuilder(options_, compact->outfile);
-  }
-  return s;
-}
-
-Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
-                                          Iterator* input) {
-  assert(compact != nullptr);
-  assert(compact->outfile != nullptr);
-  assert(compact->builder != nullptr);
-
-  const uint64_t output_number = compact->current_output()->number;
-  assert(output_number != 0);
-
-  // Check for iterator errors
-  Status s = input->status();
-  const uint64_t current_entries = compact->builder->NumEntries();
-  if (s.ok()) {
-    s = compact->builder->Finish();
-  } else {
-    compact->builder->Abandon();
-  }
-  const uint64_t current_bytes = compact->builder->FileSize();
-  compact->current_output()->file_size = current_bytes;
-  compact->total_bytes += current_bytes;
-  delete compact->builder;
-  compact->builder = nullptr;
-
-  // Finish and check for file errors
-  if (s.ok()) {
-    s = compact->outfile->Sync();
-  }
-  if (s.ok()) {
-    s = compact->outfile->Close();
-  }
-  delete compact->outfile;
-  compact->outfile = nullptr;
-
-  if (s.ok() && current_entries > 0) {
-    // Verify that the table is usable
-    Iterator* iter =
-        table_cache_->NewIterator(ReadOptions(), output_number, current_bytes);
-    s = iter->status();
-    delete iter;
-    if (s.ok()) {
-      Log(options_.info_log, "Generated table #%llu@%d: %lld keys, %lld bytes",
-          (unsigned long long)output_number, compact->compaction->level(),
-          (unsigned long long)current_entries,
-          (unsigned long long)current_bytes);
+    // Finish and check for file errors
+    if (s.ok())
+    {
+        s = compact->outfile->Sync();
     }
-  }
-  return s;
+    if (s.ok())
+    {
+        s = compact->outfile->Close();
+    }
+    delete compact->outfile;
+    compact->outfile = nullptr;
+
+    if (s.ok() && current_entries > 0)
+    {
+        // Verify that the table is usable
+        Iterator* iter =
+            table_cache_->NewIterator(ReadOptions(), output_number, current_bytes);
+        s = iter->status();
+        delete iter;
+        if (s.ok())
+        {
+            Log(options_.info_log, "Generated table #%llu@%d: %lld keys, %lld bytes",
+                (unsigned long long)output_number, compact->compaction->level(),
+                (unsigned long long)current_entries,
+                (unsigned long long)current_bytes);
+        }
+    }
+    return s;
 }
 
 Status DBImpl::InstallCompactionResults(CompactionState* compact) {
@@ -1006,165 +1121,211 @@ Status DBImpl::InstallCompactionResults(CompactionState* compact) {
   return versions_->LogAndApply(compact->compaction->edit(), &mutex_);
 }
 
-Status DBImpl::DoCompactionWork(CompactionState* compact) {
-  const uint64_t start_micros = env_->NowMicros();
-  int64_t imm_micros = 0;  // Micros spent doing imm_ compactions
+/**
+ * @brief Major Compaction 的实现
+ * 
+ * @param compact 
+ * @return Status 
+ */
+Status
+DBImpl::DoCompactionWork(CompactionState* compact)
+{
+    const uint64_t start_micros = env_->NowMicros();
+    int64_t imm_micros = 0;  // Micros spent doing imm_ compactions
 
-  Log(options_.info_log, "Compacting %d@%d + %d@%d files",
-      compact->compaction->num_input_files(0), compact->compaction->level(),
-      compact->compaction->num_input_files(1),
-      compact->compaction->level() + 1);
+    Log(options_.info_log, "Compacting %d@%d + %d@%d files",
+        compact->compaction->num_input_files(0),
+        compact->compaction->level(),
+        compact->compaction->num_input_files(1),
+        compact->compaction->level() + 1);
 
-  assert(versions_->NumLevelFiles(compact->compaction->level()) > 0);
-  assert(compact->builder == nullptr);
-  assert(compact->outfile == nullptr);
-  if (snapshots_.empty()) {
-    compact->smallest_snapshot = versions_->LastSequence();
-  } else {
-    compact->smallest_snapshot = snapshots_.oldest()->sequence_number();
-  }
-
-  Iterator* input = versions_->MakeInputIterator(compact->compaction);
-
-  // Release mutex while we're actually doing the compaction work
-  mutex_.Unlock();
-
-  input->SeekToFirst();
-  Status status;
-  ParsedInternalKey ikey;
-  std::string current_user_key;
-  bool has_current_user_key = false;
-  SequenceNumber last_sequence_for_key = kMaxSequenceNumber;
-  while (input->Valid() && !shutting_down_.load(std::memory_order_acquire)) {
-    // Prioritize immutable compaction work
-    if (has_imm_.load(std::memory_order_relaxed)) {
-      const uint64_t imm_start = env_->NowMicros();
-      mutex_.Lock();
-      if (imm_ != nullptr) {
-        CompactMemTable();
-        // Wake up MakeRoomForWrite() if necessary.
-        background_work_finished_signal_.SignalAll();
-      }
-      mutex_.Unlock();
-      imm_micros += (env_->NowMicros() - imm_start);
+    assert(versions_->NumLevelFiles(compact->compaction->level()) > 0);
+    assert(compact->builder == nullptr);
+    assert(compact->outfile == nullptr);
+    // 保留最旧的 snapshot number (TODO: for what?)
+    if (snapshots_.empty())
+    {
+        compact->smallest_snapshot = versions_->LastSequence();
+    }
+    else
+    {
+        compact->smallest_snapshot = snapshots_.oldest()->sequence_number();
     }
 
-    Slice key = input->key();
-    if (compact->compaction->ShouldStopBefore(key) &&
-        compact->builder != nullptr) {
-      status = FinishCompactionOutputFile(compact, input);
-      if (!status.ok()) {
-        break;
-      }
-    }
+    Iterator* input = versions_->MakeInputIterator(compact->compaction);
 
-    // Handle key/value, add to state, etc.
-    bool drop = false;
-    if (!ParseInternalKey(key, &ikey)) {
-      // Do not hide error keys
-      current_user_key.clear();
-      has_current_user_key = false;
-      last_sequence_for_key = kMaxSequenceNumber;
-    } else {
-      if (!has_current_user_key ||
-          user_comparator()->Compare(ikey.user_key, Slice(current_user_key)) !=
-              0) {
-        // First occurrence of this user key
-        current_user_key.assign(ikey.user_key.data(), ikey.user_key.size());
-        has_current_user_key = true;
-        last_sequence_for_key = kMaxSequenceNumber;
-      }
+    // 实际进行 Compaction 过程中释放锁
+    mutex_.Unlock();
 
-      if (last_sequence_for_key <= compact->smallest_snapshot) {
-        // Hidden by an newer entry for same user key
-        drop = true;  // (A)
-      } else if (ikey.type == kTypeDeletion &&
-                 ikey.sequence <= compact->smallest_snapshot &&
-                 compact->compaction->IsBaseLevelForKey(ikey.user_key)) {
-        // For this user key:
-        // (1) there is no data in higher levels
-        // (2) data in lower levels will have larger sequence numbers
-        // (3) data in layers that are being compacted here and have
-        //     smaller sequence numbers will be dropped in the next
-        //     few iterations of this loop (by rule (A) above).
-        // Therefore this deletion marker is obsolete and can be dropped.
-        drop = true;
-      }
+    input->SeekToFirst();
+    Status status;
+    ParsedInternalKey ikey;
+    std::string current_user_key;
+    // 当前 key 的 userkey 之前是否出现过
+    bool has_current_user_key = false;
+    // 上次出现时的 sequence number
+    // 若之前没出现过则为 kMaxSequenceNumber
+    SequenceNumber last_sequence_for_key = kMaxSequenceNumber;
+    while (input->Valid()
+           && !shutting_down_.load(std::memory_order_acquire))
+    {
+        // 先看看是否有 immutable memtable 等待 minor compaction
+        // compaction 线程优先 minor compaction
+        if (has_imm_.load(std::memory_order_relaxed))
+        {
+            const uint64_t imm_start = env_->NowMicros();
+            mutex_.Lock();
+            if (imm_ != nullptr)
+            {
+                CompactMemTable();
+                // Wake up MakeRoomForWrite() if necessary.
+                background_work_finished_signal_.SignalAll();
+            }
+            mutex_.Unlock();
+            imm_micros += (env_->NowMicros() - imm_start);
+        }
 
-      last_sequence_for_key = ikey.sequence;
-    }
+        Slice key = input->key();
+
+        // 如果 output 加上这个 key 之后与 granparent_ 的 overlap 太大,
+        // 主动关闭当前的 SST file
+        if (compact->compaction->ShouldStopBefore(key)
+            && compact->builder != nullptr)
+        {
+            status = FinishCompactionOutputFile(compact, input);
+            if (!status.ok())
+            {
+                break;
+            }
+        }
+
+        // Handle key/value, add to state, etc.
+        bool drop = false;
+        if (!ParseInternalKey(key, &ikey))
+        {
+            // 解析该 key 出错, 这里不希望隐藏该 error key
+            current_user_key.clear();
+            has_current_user_key = false;
+            last_sequence_for_key = kMaxSequenceNumber;
+        }
+        else
+        {
+            if (!has_current_user_key
+                || user_comparator()->Compare(ikey.user_key, Slice(current_user_key)) != 0)
+            {
+                // 一个 user key 第一次出现
+                current_user_key.assign(ikey.user_key.data(), ikey.user_key.size());
+                has_current_user_key = true;
+                last_sequence_for_key = kMaxSequenceNumber;
+                // Note. 即便 SequenceNumber 可能在 smallest_snapshot 前
+                // 但如果一个 UserKey 是第一次出现, 也不能将其丢弃
+            }
+
+            if (last_sequence_for_key <= compact->smallest_snapshot)
+            {
+                // 如果一个 key 不是第一次出现, 且其 sequence 在最小的快照之前
+                // 表明该 entry 已经被一个更新的 userkey 覆盖
+                drop = true;  // (A)
+            }
+            else if (ikey.type == kTypeDeletion
+                     && ikey.sequence <= compact->smallest_snapshot
+                     && compact->compaction->IsBaseLevelForKey(ikey.user_key))
+            {
+                // 对于一个可能被 compact 到 level_+1 的 user key:
+                // (1) 其类型是 Deletion
+                // (2) 在 level_+2 即更高层中没有同样的 user key
+                // (3) 在本次 compact 的层中的数据, 以及有着更小的 sequence number
+                //     的数据会在之后的迭代中被丢弃 (上述的 rule (A) 保证)
+                // 综上, 这个 deletion marker (即该 key/value entry) 可以直接丢弃
+                drop = true;
+            }
+
+            last_sequence_for_key = ikey.sequence;
+        }
 #if 0
-    Log(options_.info_log,
-        "  Compact: %s, seq %d, type: %d %d, drop: %d, is_base: %d, "
-        "%d smallest_snapshot: %d",
-        ikey.user_key.ToString().c_str(),
-        (int)ikey.sequence, ikey.type, kTypeValue, drop,
-        compact->compaction->IsBaseLevelForKey(ikey.user_key),
-        (int)last_sequence_for_key, (int)compact->smallest_snapshot);
+        Log(options_.info_log,
+            "  Compact: %s, seq %d, type: %d %d, drop: %d, is_base: %d, "
+            "%d smallest_snapshot: %d",
+            ikey.user_key.ToString().c_str(),
+            (int)ikey.sequence, ikey.type, kTypeValue, drop,
+            compact->compaction->IsBaseLevelForKey(ikey.user_key),
+            (int)last_sequence_for_key, (int)compact->smallest_snapshot);
 #endif
+        
+        // 将需要保留的 key/value 加入到当前的 output SST file 中
+        if (!drop)
+        {
+            // 如果 output 与 level_+2 的 overlap 过大会在上面被关闭
+            // 所以如果需要这里重新开一个 output file
+            if (compact->builder == nullptr)
+            {
+                status = OpenCompactionOutputFile(compact);
+                if (!status.ok()) break;
+            }
 
-    if (!drop) {
-      // Open output file if necessary
-      if (compact->builder == nullptr) {
-        status = OpenCompactionOutputFile(compact);
-        if (!status.ok()) {
-          break;
+            if (compact->builder->NumEntries() == 0)
+            {
+                // 新的 output SST file builder, 置当前 key 为 smallest
+                compact->current_output()->smallest.DecodeFrom(key);
+            }
+
+            compact->current_output()->largest.DecodeFrom(key);
+            compact->builder->Add(key, input->value());
+
+            // 当 output file 的大小超过该层 SST file 阈值时主动关闭
+            if (compact->builder->FileSize() >= compact->compaction->MaxOutputFileSize())
+            {
+                status = FinishCompactionOutputFile(compact, input);
+                if (!status.ok()) break;
+            }
         }
-      }
-      if (compact->builder->NumEntries() == 0) {
-        compact->current_output()->smallest.DecodeFrom(key);
-      }
-      compact->current_output()->largest.DecodeFrom(key);
-      compact->builder->Add(key, input->value());
 
-      // Close output file if it is big enough
-      if (compact->builder->FileSize() >=
-          compact->compaction->MaxOutputFileSize()) {
+        input->Next();  // 同 UserKey 是按照 Seq 降序遍历的
+    }
+
+    if (status.ok() && shutting_down_.load(std::memory_order_acquire))
+    {
+        status = Status::IOError("Deleting DB during compaction");
+    }
+    if (status.ok() && compact->builder != nullptr)
+    {
         status = FinishCompactionOutputFile(compact, input);
-        if (!status.ok()) {
-          break;
+    }
+    if (status.ok())
+    {
+        status = input->status();
+    }
+    delete input;
+    input = nullptr;
+
+    CompactionStats stats;
+    stats.micros = env_->NowMicros() - start_micros - imm_micros;
+    for (int which = 0; which < 2; which++)
+    {
+        for (int i = 0; i < compact->compaction->num_input_files(which); i++)
+        {
+            stats.bytes_read += compact->compaction->input(which, i)->file_size;
         }
-      }
+    }
+    for (size_t i = 0; i < compact->outputs.size(); i++)
+    {
+        stats.bytes_written += compact->outputs[i].file_size;
     }
 
-    input->Next();
-  }
+    mutex_.Lock();
+    stats_[compact->compaction->level() + 1].Add(stats);
 
-  if (status.ok() && shutting_down_.load(std::memory_order_acquire)) {
-    status = Status::IOError("Deleting DB during compaction");
-  }
-  if (status.ok() && compact->builder != nullptr) {
-    status = FinishCompactionOutputFile(compact, input);
-  }
-  if (status.ok()) {
-    status = input->status();
-  }
-  delete input;
-  input = nullptr;
-
-  CompactionStats stats;
-  stats.micros = env_->NowMicros() - start_micros - imm_micros;
-  for (int which = 0; which < 2; which++) {
-    for (int i = 0; i < compact->compaction->num_input_files(which); i++) {
-      stats.bytes_read += compact->compaction->input(which, i)->file_size;
+    if (status.ok())
+    {
+        status = InstallCompactionResults(compact);
     }
-  }
-  for (size_t i = 0; i < compact->outputs.size(); i++) {
-    stats.bytes_written += compact->outputs[i].file_size;
-  }
-
-  mutex_.Lock();
-  stats_[compact->compaction->level() + 1].Add(stats);
-
-  if (status.ok()) {
-    status = InstallCompactionResults(compact);
-  }
-  if (!status.ok()) {
-    RecordBackgroundError(status);
-  }
-  VersionSet::LevelSummaryStorage tmp;
-  Log(options_.info_log, "compacted to: %s", versions_->LevelSummary(&tmp));
-  return status;
+    if (!status.ok())
+    {
+        RecordBackgroundError(status);
+    }
+    VersionSet::LevelSummaryStorage tmp;
+    Log(options_.info_log, "compacted to: %s", versions_->LevelSummary(&tmp));
+    return status;
 }
 
 namespace {
@@ -1375,40 +1536,45 @@ DBImpl::Write(const WriteOptions& options, WriteBatch* updates)
 
     MutexLock l(&mutex_);
     writers_.push_back(&w);
-    while (!w.done && &w != writers_.front()) {
+    while (!w.done && &w != writers_.front())
+    {
         w.cv.Wait();
     }
-    if (w.done) {
-        return w.status;
-    }
+
+    if (w.done) return w.status;
 
     // May temporarily unlock and wait.
     Status status = MakeRoomForWrite(updates == nullptr);
     uint64_t last_sequence = versions_->LastSequence();
     Writer* last_writer = &w;
-    if (status.ok() && updates != nullptr)  // nullptr batch is for compactions
+    if (status.ok()
+        && updates != nullptr)  // nullptr batch is for compactions
     {
         WriteBatch* write_batch = BuildBatchGroup(&last_writer);
         WriteBatchInternal::SetSequence(write_batch, last_sequence + 1);
         last_sequence += WriteBatchInternal::Count(write_batch);
 
-        // Add to log and apply to memtable.  We can release the lock
-        // during this phase since &w is currently responsible for logging
-        // and protects against concurrent loggers and concurrent writes
-        // into mem_.
+        // append 到 WAL, 并 apply 到 memtable
+        // 在这阶段可以释放锁, 因为 &w 目前负责 logging 以及防止有并发的 logger 和并发的写 mem_
         {
             mutex_.Unlock();
+
+            // write WAL with sync
             status = log_->AddRecord(WriteBatchInternal::Contents(write_batch));
             bool sync_error = false;
-            if (status.ok() && options.sync) {
-                status = logfile_->Sync();
+            if (status.ok() && options.sync)
+            {
+                status = logfile_->Sync();  // TODO, log_ & logfile_? 看起来是一个东西, 但两者都有 sync?
                 if (!status.ok()) {
                     sync_error = true;
                 }
             }
+
+            // write to memtable
             if (status.ok()) {
                 status = WriteBatchInternal::InsertInto(write_batch, mem_);
             }
+
             mutex_.Lock();
             if (sync_error) {
                 // The state of the log file is indeterminate: the log record we
@@ -1417,15 +1583,19 @@ DBImpl::Write(const WriteOptions& options, WriteBatch* updates)
                 RecordBackgroundError(status);
             }
         }
+
         if (write_batch == tmp_batch_) tmp_batch_->Clear();
 
         versions_->SetLastSequence(last_sequence);
     }
 
-    while (true) {
+    // 通知之前队列里排队, 且被 piggyback 的 batch
+    while (true)
+    {
         Writer* ready = writers_.front();
         writers_.pop_front();
-        if (ready != &w) {
+        if (ready != &w)
+        {
             ready->status = status;
             ready->done = true;
             ready->cv.Signal();
@@ -1433,7 +1603,7 @@ DBImpl::Write(const WriteOptions& options, WriteBatch* updates)
         if (ready == last_writer) break;
     }
 
-    // Notify new head of write queue
+    // 如果队列还有在排队的, notify 开始下一次 Write
     if (!writers_.empty()) {
         writers_.front()->cv.Signal();
     }
@@ -1443,116 +1613,151 @@ DBImpl::Write(const WriteOptions& options, WriteBatch* updates)
 
 // REQUIRES: Writer list must be non-empty
 // REQUIRES: First writer must have a non-null batch
-WriteBatch* DBImpl::BuildBatchGroup(Writer** last_writer) {
-  mutex_.AssertHeld();
-  assert(!writers_.empty());
-  Writer* first = writers_.front();
-  WriteBatch* result = first->batch;
-  assert(result != nullptr);
+/**
+ * @brief 从 writers 的对头开始向后尝试聚合一个 write batch
+ * 
+ * @note 若队首 non-sync, 不会将 sync 的 write 加入 batch
+ *       会根据 writer_front 的 batch size 调整 batch 的大小
+ * 
+ * @param last_writer [IN], 调用时 Writer 的指针
+ *                    [OUT], 指向最后一个加入到 write batch 的 Writer
+ * @return WriteBatch*, 本次 writers 队列中可以 batch 的 writes
+ *                      所聚合成的一个 write batch
+ */
+WriteBatch*
+DBImpl::BuildBatchGroup(Writer** last_writer)
+{
+    mutex_.AssertHeld();
+    assert(!writers_.empty());
 
-  size_t size = WriteBatchInternal::ByteSize(first->batch);
+    // writer_ 的队首决定了本次 write 的 batch 的一些属性
+    Writer* first = writers_.front();
+    WriteBatch* result = first->batch;
+    assert(result != nullptr);
 
-  // Allow the group to grow up to a maximum size, but if the
-  // original write is small, limit the growth so we do not slow
-  // down the small write too much.
-  size_t max_size = 1 << 20;
-  if (size <= (128 << 10)) {
-    max_size = size + (128 << 10);
-  }
+    size_t size = WriteBatchInternal::ByteSize(first->batch);
 
-  *last_writer = first;
-  std::deque<Writer*>::iterator iter = writers_.begin();
-  ++iter;  // Advance past "first"
-  for (; iter != writers_.end(); ++iter) {
-    Writer* w = *iter;
-    if (w->sync && !first->sync) {
-      // Do not include a sync write into a batch handled by a non-sync write.
-      break;
+    // 允许 BatchGroup 增长到 max size
+    size_t max_size = 1 << 20;  // (1M)
+    // 但如果是 small write，将限制可增长到的阈值，从而避免过多地减慢 small write
+    if (size <= (128 << 10)) // (128K)
+        max_size = size + (128 << 10);
+
+    *last_writer = first;
+    std::deque<Writer*>::iterator iter = writers_.begin();
+    ++iter;  // Advance past "first"
+    for (; iter != writers_.end(); ++iter)
+    {
+        Writer* w = *iter;
+        if (w->sync && !first->sync)
+        {
+            // 若队列中某一个 writebatch 需要 sync, 但队首可以异步
+            // 这里不讲这个 sync write 加入到一个由 non-sync write 的 batch 中
+            break;
+        }
+
+        if (w->batch != nullptr)
+        {
+            size += WriteBatchInternal::ByteSize(w->batch);
+            if (size > max_size)
+            {
+                // Do not make batch too big
+                break;
+            }
+
+            if (result == first->batch)
+            {
+                // 循环第一次的初始化动作
+                // 使用 tmp_batch 来存储 writes, 并将 first 放入到 tmp_batch
+                result = tmp_batch_;
+                assert(WriteBatchInternal::Count(result) == 0);
+                WriteBatchInternal::Append(result, first->batch);
+            }
+
+            // Append to *result
+            WriteBatchInternal::Append(result, w->batch);
+        }
+        *last_writer = w;
     }
-
-    if (w->batch != nullptr) {
-      size += WriteBatchInternal::ByteSize(w->batch);
-      if (size > max_size) {
-        // Do not make batch too big
-        break;
-      }
-
-      // Append to *result
-      if (result == first->batch) {
-        // Switch to temporary batch instead of disturbing caller's batch
-        result = tmp_batch_;
-        assert(WriteBatchInternal::Count(result) == 0);
-        WriteBatchInternal::Append(result, first->batch);
-      }
-      WriteBatchInternal::Append(result, w->batch);
-    }
-    *last_writer = w;
-  }
-  return result;
+    return result;
 }
 
 // REQUIRES: mutex_ is held
 // REQUIRES: this thread is currently at the front of the writer queue
-Status DBImpl::MakeRoomForWrite(bool force) {
-  mutex_.AssertHeld();
-  assert(!writers_.empty());
-  bool allow_delay = !force;
-  Status s;
-  while (true) {
-    if (!bg_error_.ok()) {
-      // Yield previous error
-      s = bg_error_;
-      break;
-    } else if (allow_delay && versions_->NumLevelFiles(0) >=
-                                  config::kL0_SlowdownWritesTrigger) {
-      // We are getting close to hitting a hard limit on the number of
-      // L0 files.  Rather than delaying a single write by several
-      // seconds when we hit the hard limit, start delaying each
-      // individual write by 1ms to reduce latency variance.  Also,
-      // this delay hands over some CPU to the compaction thread in
-      // case it is sharing the same core as the writer.
-      mutex_.Unlock();
-      env_->SleepForMicroseconds(1000);
-      allow_delay = false;  // Do not delay a single write more than once
-      mutex_.Lock();
-    } else if (!force &&
-               (mem_->ApproximateMemoryUsage() <= options_.write_buffer_size)) {
-      // There is room in current memtable
-      break;
-    } else if (imm_ != nullptr) {
-      // We have filled up the current memtable, but the previous
-      // one is still being compacted, so we wait.
-      Log(options_.info_log, "Current memtable full; waiting...\n");
-      background_work_finished_signal_.Wait();
-    } else if (versions_->NumLevelFiles(0) >= config::kL0_StopWritesTrigger) {
-      // There are too many level-0 files.
-      Log(options_.info_log, "Too many L0 files; waiting...\n");
-      background_work_finished_signal_.Wait();
-    } else {
-      // Attempt to switch to a new memtable and trigger compaction of old
-      assert(versions_->PrevLogNumber() == 0);
-      uint64_t new_log_number = versions_->NewFileNumber();
-      WritableFile* lfile = nullptr;
-      s = env_->NewWritableFile(LogFileName(dbname_, new_log_number), &lfile);
-      if (!s.ok()) {
-        // Avoid chewing through file number space in a tight loop.
-        versions_->ReuseFileNumber(new_log_number);
-        break;
-      }
-      delete log_;
-      delete logfile_;
-      logfile_ = lfile;
-      logfile_number_ = new_log_number;
-      log_ = new log::Writer(lfile);
-      imm_ = mem_;
-      has_imm_.store(true, std::memory_order_release);
-      mem_ = new MemTable(internal_comparator_);
-      mem_->Ref();
-      force = false;  // Do not force another compaction if have room
-      MaybeScheduleCompaction();
+Status DBImpl::MakeRoomForWr]ite(bool force)
+{
+    mutex_.AssertHeld();
+    assert(!writers_.empty());
+
+    bool allow_delay = !force;
+    Status s;
+    while (true)
+    {
+        if (!bg_error_.ok())
+        {
+            // Yield previous error
+            s = bg_error_;
+            break;
+        }
+        else if (allow_delay
+                 && versions_->NumLevelFiles(0) >= config::kL0_SlowdownWritesTrigger)
+        {
+            // 表示当前的 L0 files 已经接近阈值
+            // 当实际到达阈值时写请求可能会被 delay 数秒, 所以我们选择在每个写中
+            // delay 1ms, 以减少延迟的抖动.
+            // 这里的 delay 会将 CPU 让给 compaction thread, 以防他们与 writer
+            // 共享同一个 CPU core
+            mutex_.Unlock();
+            env_->SleepForMicroseconds(1000);
+            allow_delay = false;  // 一个写只允许 Delay 一次
+            mutex_.Lock();
+        }
+        else if (!force
+                 && (mem_->ApproximateMemoryUsage() <= options_.write_buffer_size))
+        {
+            // There is room in current memtable
+            break;
+        }
+        else if (imm_ != nullptr)
+        {
+            // 当前的 memtable 已满, 但前一个 minor compaction 还在进行
+            // so we wait.
+            Log(options_.info_log, "Current memtable full; waiting...\n");
+            background_work_finished_signal_.Wait();
+        }
+        else if (versions_->NumLevelFiles(0) >= config::kL0_StopWritesTrigger)
+        {
+            // 当 L0 文件数达到阈值了(12), 需要等待 compaction 完成
+            Log(options_.info_log, "Too many L0 files; waiting...\n");
+            background_work_finished_signal_.Wait();
+        }
+        else
+        {
+            // 这里表示 memtable 已满, 准备切换为 imm 并进行 minor compaction
+            assert(versions_->PrevLogNumber() == 0);
+            uint64_t new_log_number = versions_->NewFileNumber();
+            WritableFile* lfile = nullptr;
+            s = env_->NewWritableFile(LogFileName(dbname_, new_log_number), &lfile);
+            if (!s.ok())
+            {
+                // Avoid chewing through file number space in a tight loop.
+                versions_->ReuseFileNumber(new_log_number);
+                break;
+            }
+            delete log_;
+            delete logfile_;
+            logfile_ = lfile;
+            logfile_number_ = new_log_number;
+            log_ = new log::Writer(lfile);
+            imm_ = mem_;
+            has_imm_.store(true, std::memory_order_release);
+            mem_ = new MemTable(internal_comparator_);
+            mem_->Ref();
+            force = false;  // Do not force another compaction if have room
+            MaybeScheduleCompaction();
+        }
     }
-  }
-  return s;
+    return s;
 }
 
 bool DBImpl::GetProperty(const Slice& property, std::string* value) {
@@ -1649,10 +1854,11 @@ DB::Put(const WriteOptions& opt, const Slice& key, const Slice& value)
     return Write(opt, &batch);
 }
 
+// 和 Put 类似的行为
 Status DB::Delete(const WriteOptions& opt, const Slice& key) {
-  WriteBatch batch;
-  batch.Delete(key);
-  return Write(opt, &batch);
+    WriteBatch batch;
+    batch.Delete(key);
+    return Write(opt, &batch);
 }
 
 DB::~DB() = default;

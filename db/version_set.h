@@ -249,9 +249,6 @@ public:
     // 对于任一个 level >= 1 的 file, 返回 next level 中与其存在 overlapping 的最大字节数
     int64_t MaxNextLevelOverlappingBytes();
 
-    // Create an iterator that reads over the compaction inputs for "*c".
-    // The caller should delete the iterator when no longer needed.
-    // 创建一个迭代器，读取 "*c "的压实输入。当不再需要时，调用者应该删除这个迭代器。
     Iterator* MakeInputIterator(Compaction* c);
 
     /**
@@ -348,7 +345,7 @@ public:
     // "which" must be either 0 or 1
     int num_input_files(int which) const { return inputs_[which].size(); }
 
-    // Return the ith input file at "level()+which" ("which" must be 0 or 1).
+    // 返回该 compaction 中 level[which] 的第 i 个文件 (which 必须为 0/1)
     FileMetaData* input(int which, int i) const { return inputs_[which][i]; }
 
     // Maximum size of files to build during this compaction.
@@ -365,7 +362,6 @@ public:
     // 不存在大于 level(n+1) 的层中
     bool IsBaseLevelForKey(const Slice& user_key);
 
-    // 返回 True 表示我们应在处理 internal_key 之前就停止构建当前的 output
     bool ShouldStopBefore(const Slice& internal_key);
 
     // 一旦 Compacation 成功，释放本次 compaction 的 input version
@@ -377,12 +373,12 @@ private:
 
     Compaction(const Options* options, int level);
 
-    int level_;
+    int level_; // 需要 compact 的起始 level
     uint64_t max_output_file_size_;
     Version* input_version_;
     VersionEdit edit_;
 
-    // 指代 level-n 和 level-(n+1)
+    // 指代 level-n 和 level-(n+1) 需要 compact 的 SST files 编号
     std::vector<FileMetaData*> inputs_[2];  // The two sets of inputs
 
     // 用于检查 overlapping grandparent 文件数量的相关元数据

@@ -50,13 +50,10 @@ public:
     void GetApproximateSizes(const Range* range, int n, uint64_t* sizes) override;
     void CompactRange(const Slice* begin, const Slice* end) override;
 
-  // Extra methods (for testing) that are not in the public DB interface
+    // Extra methods (for testing) that are not in the public DB interface
 
-  // Compact any files in the named level that overlap [*begin,*end]
-  void TEST_CompactRange(int level, const Slice* begin, const Slice* end);
-
-  // Force current memtable contents to be compacted.
-  Status TEST_CompactMemTable();
+    void TEST_CompactRange(int level, const Slice* begin, const Slice* end);
+    Status TEST_CompactMemTable();
 
   // Return an internal iterator over the current state of the database.
   // The keys of this iterator are internal keys (see format.h).

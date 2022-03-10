@@ -30,52 +30,53 @@ namespace leveldb {
 
 class Slice;
 
-class LEVELDB_EXPORT WriteBatch {
- public:
-  class LEVELDB_EXPORT Handler {
-   public:
-    virtual ~Handler();
-    virtual void Put(const Slice& key, const Slice& value) = 0;
-    virtual void Delete(const Slice& key) = 0;
-  };
+class LEVELDB_EXPORT WriteBatch
+{
+public:
+    class LEVELDB_EXPORT Handler {
+    public:
+        virtual ~Handler();
+        virtual void Put(const Slice& key, const Slice& value) = 0;
+        virtual void Delete(const Slice& key) = 0;
+    };
 
-  WriteBatch();
+    WriteBatch();
 
-  // Intentionally copyable.
-  WriteBatch(const WriteBatch&) = default;
-  WriteBatch& operator=(const WriteBatch&) = default;
+    // Intentionally copyable.
+    WriteBatch(const WriteBatch&) = default;
+    WriteBatch& operator=(const WriteBatch&) = default;
 
-  ~WriteBatch();
+    ~WriteBatch();
 
-    // Store the mapping "key->value" in the database.
+    // 将 key->value 的 mapping 存储到数据库中
     void Put(const Slice& key, const Slice& value);
 
-  // If the database contains a mapping for "key", erase it.  Else do nothing.
-  void Delete(const Slice& key);
+    // 如果数据库中包含有一个 key 的 mapping 则擦除该记录
+    // 否则不会做任何操作
+    void Delete(const Slice& key);
 
-  // Clear all updates buffered in this batch.
-  void Clear();
+    // 清除该 batch 中所有 buffered updates
+    void Clear();
 
-  // The size of the database changes caused by this batch.
-  //
-  // This number is tied to implementation details, and may change across
-  // releases. It is intended for LevelDB usage metrics.
-  size_t ApproximateSize() const;
+    // The size of the database changes caused by this batch.
+    //
+    // This number is tied to implementation details, and may change across
+    // releases. It is intended for LevelDB usage metrics.
+    size_t ApproximateSize() const;
 
-  // Copies the operations in "source" to this batch.
-  //
-  // This runs in O(source size) time. However, the constant factor is better
-  // than calling Iterate() over the source batch with a Handler that replicates
-  // the operations into this batch.
-  void Append(const WriteBatch& source);
+    // 将 source 种的 batch 拷贝到该 WriteBatch 中
+    // 
+    // 其时间复杂度为 O(source size). 常数因子比对 source batch 调用 Iterate()
+    // 并使用一个 Handler 将 operations 复制到该 batch 要更好
+    void Append(const WriteBatch& source);
 
-  // Support for iterating over the contents of a batch.
-  Status Iterate(Handler* handler) const;
+    // Support for iterating over the contents of a batch.
+    Status Iterate(Handler* handler) const;
 
- private:
-  friend class WriteBatchInternal;
+private:
+    friend class WriteBatchInternal;
 
-  std::string rep_;  // See comment in write_batch.cc for the format of rep_
+    std::string rep_;  // See comment in write_batch.cc for the format of rep_
 };
 
 }  // namespace leveldb

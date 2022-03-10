@@ -63,7 +63,6 @@ public:
 
 	// Remove the database entry (if any) for "key".
 	// Returns OK on success, and a non-OK status on error.
-	// It is not an error if "key" did not exist in the database.
 	// Note: consider setting options.sync = true.
 	// 当 DB 中不存在传入的 key 时不被认为是一个 error
 	virtual Status Delete(const WriteOptions& options, const Slice& key) = 0;

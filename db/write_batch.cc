@@ -39,44 +39,58 @@ void WriteBatch::Clear() {
 
 size_t WriteBatch::ApproximateSize() const { return rep_.size(); }
 
-Status WriteBatch::Iterate(Handler* handler) const {
-  Slice input(rep_);
-  if (input.size() < kHeader) {
-    return Status::Corruption("malformed WriteBatch (too small)");
-  }
-
-  input.remove_prefix(kHeader);
-  Slice key, value;
-  int found = 0;
-  while (!input.empty()) {
-    found++;
-    char tag = input[0];
-    input.remove_prefix(1);
-    switch (tag) {
-      case kTypeValue:
-        if (GetLengthPrefixedSlice(&input, &key) &&
-            GetLengthPrefixedSlice(&input, &value)) {
-          handler->Put(key, value);
-        } else {
-          return Status::Corruption("bad WriteBatch Put");
-        }
-        break;
-      case kTypeDeletion:
-        if (GetLengthPrefixedSlice(&input, &key)) {
-          handler->Delete(key);
-        } else {
-          return Status::Corruption("bad WriteBatch Delete");
-        }
-        break;
-      default:
-        return Status::Corruption("unknown WriteBatch tag");
+Status
+WriteBatch::Iterate(Handler* handler) const
+{
+    Slice input(rep_);
+    if (input.size() < kHeader) {
+        return Status::Corruption("malformed WriteBatch (too small)");
     }
-  }
-  if (found != WriteBatchInternal::Count(this)) {
-    return Status::Corruption("WriteBatch has wrong count");
-  } else {
-    return Status::OK();
-  }
+
+    input.remove_prefix(kHeader);
+    Slice key, value;
+    int found = 0;
+    while (!input.empty())
+    {
+        found++;
+        char tag = input[0];
+        input.remove_prefix(1);
+        switch (tag)
+        {
+        case kTypeValue:
+            if (GetLengthPrefixedSlice(&input, &key)
+                && GetLengthPrefixedSlice(&input, &value))
+            {
+                handler->Put(key, value);
+            }
+            else
+            {
+                return Status::Corruption("bad WriteBatch Put");
+            }
+            break;
+        case kTypeDeletion:
+            if (GetLengthPrefixedSlice(&input, &key))
+            {
+                handler->Delete(key);
+            }
+            else
+            {
+                return Status::Corruption("bad WriteBatch Delete");
+            }
+            break;
+        default:
+            return Status::Corruption("unknown WriteBatch tag");
+        }
+    }
+
+    if (found != WriteBatchInternal::Count(this))
+    {
+        return Status::Corruption("WriteBatch has wrong count");
+    }
+    else
+    {
+        return Status::OK();
+    }
 }
 
 int WriteBatchInternal::Count(const WriteBatch* b) {
@@ -130,11 +144,13 @@ class MemTableInserter : public WriteBatch::Handler {
 };
 }  // namespace
 
-Status WriteBatchInternal::InsertInto(const WriteBatch* b, MemTable* memtable) {
-  MemTableInserter inserter;
-  inserter.sequence_ = WriteBatchInternal::Sequence(b);
-  inserter.mem_ = memtable;
-  return b->Iterate(&inserter);
+Status
+WriteBatchInternal::InsertInto(const WriteBatch* b, MemTable* memtable)
+{
+    MemTableInserter inserter;
+    inserter.sequence_ = WriteBatchInternal::Sequence(b);
+    inserter.mem_ = memtable;
+    return b->Iterate(&inserter);
 }
 
 void WriteBatchInternal::SetContents(WriteBatch* b, const Slice& contents) {

@@ -44,20 +44,24 @@ const char* InternalKeyComparator::Name() const {
   return "leveldb.InternalKeyComparator";
 }
 
-// InternalKey 的比较顺位:
-// - 首先是按照 user key(根据用户提供的 comparator) 进行升序排序
-// - 其次是 sequence number 降序排序
-// - 最后根据 type 降序排序
-int InternalKeyComparator::Compare(const Slice& akey, const Slice& bkey) const {
+/**
+ * @brief 比较两个 InternalKey, Internal 比较规则如下:
+ * - 首先比较 user key 部分, 结果 != 0 在按照 user_comparator_ 返回
+ * - 其次比较后 8B 的 |seq_num|type| 部分
+ *   - anum > bnum 时返回 -1
+ *   - anum < bnum 时返回 +1
+ */
+int InternalKeyComparator::Compare(const Slice& akey, const Slice& bkey) const
+{
     int r = user_comparator_->Compare(ExtractUserKey(akey), ExtractUserKey(bkey));
-    if (r == 0) {
+    if (r == 0)
+    {
         const uint64_t anum = DecodeFixed64(akey.data() + akey.size() - 8);
         const uint64_t bnum = DecodeFixed64(bkey.data() + bkey.size() - 8);
-        if (anum > bnum) {
+        if (anum > bnum)
             r = -1;
-        } else if (anum < bnum) {
+        else if (anum < bnum)
             r = +1;
-        }
     }
     return r;
 }
